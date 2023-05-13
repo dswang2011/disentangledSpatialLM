@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch LayoutLMv3 model."""
+"""PyTorch DisentLM model."""
 
 import collections
 import math
@@ -35,30 +35,30 @@ from transformers.modeling_outputs import (
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
-from LMs.configuration_layoutlmv3 import LayoutLMv3Config
+from LMs.configuration_DisentLM import DisentLMConfig
 
 
 logger = logging.get_logger(__name__)
 
-_CONFIG_FOR_DOC = "LayoutLMv3Config"
+_CONFIG_FOR_DOC = "DisentLMConfig"
 
-LAYOUTLMV3_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "microsoft/layoutlmv3-base",
-    "microsoft/layoutlmv3-large",
-    # See all LayoutLMv3 models at https://huggingface.co/models?filter=layoutlmv3
+DisentLM_PRETRAINED_MODEL_ARCHIVE_LIST = [
+    "jpmchase/DisentLM-base",
+    "jpmchase/DisentLM-large",
+    # See all DisentLM models at https://huggingface.co/models?filter=DisentLM
 ]
 
-LAYOUTLMV3_START_DOCSTRING = r"""
+DisentLM_START_DOCSTRING = r"""
     This model is a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) sub-class. Use
     it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage and
     behavior.
     Parameters:
-        config ([`LayoutLMv3Config`]): Model configuration class with all the parameters of the model.
+        config ([`DisentLMConfig`]): Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the
             configuration. Check out the [`~PreTrainedModel.from_pretrained`] method to load the model weights.
 """
 
-LAYOUTLMV3_MODEL_INPUTS_DOCSTRING = r"""
+DisentLM_MODEL_INPUTS_DOCSTRING = r"""
     Args:
         input_ids (`torch.LongTensor` of shape `({0})`):
             Indices of input sequence tokens in the vocabulary.
@@ -117,7 +117,7 @@ LAYOUTLMV3_MODEL_INPUTS_DOCSTRING = r"""
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 """
 
-LAYOUTLMV3_DOWNSTREAM_INPUTS_DOCSTRING = r"""
+DisentLM_DOWNSTREAM_INPUTS_DOCSTRING = r"""
     Args:
         input_ids (`torch.LongTensor` of shape `({0})`):
             Indices of input sequence tokens in the vocabulary.
@@ -167,8 +167,8 @@ LAYOUTLMV3_DOWNSTREAM_INPUTS_DOCSTRING = r"""
 """
 
 
-class LayoutLMv3PatchEmbeddings(nn.Module):
-    """LayoutLMv3 image (patch) embeddings. This class also automatically interpolates the position embeddings for varying
+class DisentLMPatchEmbeddings(nn.Module):
+    """DisentLM image (patch) embeddings. This class also automatically interpolates the position embeddings for varying
     image sizes."""
 
     def __init__(self, config):
@@ -202,9 +202,9 @@ class LayoutLMv3PatchEmbeddings(nn.Module):
         return embeddings
 
 
-class LayoutLMv3TextEmbeddings(nn.Module):
+class DisentLMTextEmbeddings(nn.Module):
     """
-    LayoutLMv3 text embeddings. Same as `RobertaEmbeddings` but with added spatial (layout) embeddings.
+    DisentLM text embeddings. Same as `RobertaEmbeddings` but with added spatial (layout) embeddings.
     """
 
     def __init__(self, config):
@@ -318,14 +318,14 @@ class LayoutLMv3TextEmbeddings(nn.Module):
         return embeddings
 
 
-class LayoutLMv3PreTrainedModel(PreTrainedModel):
+class DisentLMPreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
     models.
     """
 
-    config_class = LayoutLMv3Config
-    base_model_prefix = "layoutlmv3"
+    config_class = DisentLMConfig
+    base_model_prefix = "DisentLM"
 
     def _init_weights(self, module):
         """Initialize the weights"""
@@ -344,7 +344,7 @@ class LayoutLMv3PreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
 
-class LayoutLMv3SelfAttention(nn.Module):
+class DisentLMSelfAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -438,7 +438,7 @@ class LayoutLMv3SelfAttention(nn.Module):
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaSelfOutput
-class LayoutLMv3SelfOutput(nn.Module):
+class DisentLMSelfOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -452,12 +452,12 @@ class LayoutLMv3SelfOutput(nn.Module):
         return hidden_states
 
 
-# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Attention with LayoutLMv2->LayoutLMv3
-class LayoutLMv3Attention(nn.Module):
+# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Attention with LayoutLMv2->DisentLM
+class DisentLMAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.self = LayoutLMv3SelfAttention(config)
-        self.output = LayoutLMv3SelfOutput(config)
+        self.self = DisentLMSelfAttention(config)
+        self.output = DisentLMSelfOutput(config)
 
     def forward(
         self,
@@ -481,15 +481,15 @@ class LayoutLMv3Attention(nn.Module):
         return outputs
 
 
-# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->LayoutLMv3
-class LayoutLMv3Layer(nn.Module):
+# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->DisentLM
+class DisentLMLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = LayoutLMv3Attention(config)
-        self.intermediate = LayoutLMv3Intermediate(config)
-        self.output = LayoutLMv3Output(config)
+        self.attention = DisentLMAttention(config)
+        self.intermediate = DisentLMIntermediate(config)
+        self.output = DisentLMOutput(config)
 
     def forward(
         self,
@@ -525,11 +525,11 @@ class LayoutLMv3Layer(nn.Module):
         return layer_output
 
 
-class LayoutLMv3Encoder(nn.Module):
+class DisentLMEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.layer = nn.ModuleList([LayoutLMv3Layer(config) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList([DisentLMLayer(config) for _ in range(config.num_hidden_layers)])
         self.gradient_checkpointing = False
 
         self.has_relative_attention_bias = config.has_relative_attention_bias
@@ -832,7 +832,7 @@ class LayoutLMv3Encoder(nn.Module):
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaIntermediate
-class LayoutLMv3Intermediate(nn.Module):
+class DisentLMIntermediate(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.intermediate_size)
@@ -848,7 +848,7 @@ class LayoutLMv3Intermediate(nn.Module):
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaOutput
-class LayoutLMv3Output(nn.Module):
+class DisentLMOutput(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
@@ -863,10 +863,10 @@ class LayoutLMv3Output(nn.Module):
 
 
 @add_start_docstrings(
-    "The bare LayoutLMv3 Model transformer outputting raw hidden-states without any specific head on top.",
-    LAYOUTLMV3_START_DOCSTRING,
+    "The bare DisentLM Model transformer outputting raw hidden-states without any specific head on top.",
+    DisentLM_START_DOCSTRING,
 )
-class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
+class DisentLMModel(DisentLMPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config):
@@ -874,12 +874,12 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
         self.config = config
 
         if config.text_embed:
-            self.embeddings = LayoutLMv3TextEmbeddings(config)
+            self.embeddings = DisentLMTextEmbeddings(config)
 
         if config.visual_embed:
             # use the default pre-training parameters for fine-tuning (e.g., input_size)
             # when the input_size is larger in fine-tuning, we will interpolate the position embeddings in forward
-            self.patch_embed = LayoutLMv3PatchEmbeddings(config)
+            self.patch_embed = DisentLMPatchEmbeddings(config)
 
             size = int(config.input_size / config.patch_size)
             self.cls_token = nn.Parameter(torch.zeros(1, 1, config.hidden_size))
@@ -894,7 +894,7 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
 
             self.norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
 
-        self.encoder = LayoutLMv3Encoder(config)
+        self.encoder = DisentLMEncoder(config)
 
         self.init_weights()
 
@@ -958,7 +958,7 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
         return embeddings
 
     @add_start_docstrings_to_model_forward(
-        LAYOUTLMV3_MODEL_INPUTS_DOCSTRING.format("batch_size, token_sequence_length")
+        DisentLM_MODEL_INPUTS_DOCSTRING.format("batch_size, token_sequence_length")
     )
     @replace_return_docstrings(output_type=BaseModelOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
@@ -982,9 +982,9 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
         ```python
         >>> from transformers import AutoProcessor, AutoModel
         >>> from datasets import load_dataset
-        >>> processor = AutoProcessor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
-        >>> model = AutoModel.from_pretrained("microsoft/layoutlmv3-base")
-        >>> dataset = load_dataset("nielsr/funsd-layoutlmv3", split="train")
+        >>> processor = AutoProcessor.from_pretrained("microsoft/DisentLM-base", apply_ocr=False)
+        >>> model = AutoModel.from_pretrained("microsoft/DisentLM-base")
+        >>> dataset = load_dataset("nielsr/funsd-DisentLM", split="train")
         >>> example = dataset[0]
         >>> image = example["image"]
         >>> words = example["tokens"]
@@ -1115,7 +1115,7 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
         )
 
 
-class LayoutLMv3ClassificationHead(nn.Module):
+class DisentLMClassificationHead(nn.Module):
     """
     Head for sentence-level classification tasks. Reference: RobertaClassificationHead
     """
@@ -1144,14 +1144,14 @@ class LayoutLMv3ClassificationHead(nn.Module):
 
 @add_start_docstrings(
     """
-    LayoutLMv3 Model with a token classification head on top (a linear layer on top of the final hidden states) e.g.
+    DisentLM Model with a token classification head on top (a linear layer on top of the final hidden states) e.g.
     for sequence labeling (information extraction) tasks such as [FUNSD](https://guillaumejaume.github.io/FUNSD/),
     [SROIE](https://rrc.cvc.uab.es/?ch=13), [CORD](https://github.com/clovaai/cord) and
     [Kleister-NDA](https://github.com/applicaai/kleister-nda).
     """,
-    LAYOUTLMV3_START_DOCSTRING,
+    DisentLM_START_DOCSTRING,
 )
-class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
+class DisentLMForTokenClassification(DisentLMPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1159,17 +1159,17 @@ class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.layoutlmv3 = LayoutLMv3Model(config)
+        self.DisentLM = DisentLMModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         if config.num_labels < 10:
             self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         else:
-            self.classifier = LayoutLMv3ClassificationHead(config, pool_feature=False)
+            self.classifier = DisentLMClassificationHead(config, pool_feature=False)
 
         self.init_weights()
 
     @add_start_docstrings_to_model_forward(
-        LAYOUTLMV3_DOWNSTREAM_INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        DisentLM_DOWNSTREAM_INPUTS_DOCSTRING.format("batch_size, sequence_length")
     )
     @replace_return_docstrings(output_type=TokenClassifierOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
@@ -1195,9 +1195,9 @@ class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
         ```python
         >>> from transformers import AutoProcessor, AutoModelForTokenClassification
         >>> from datasets import load_dataset
-        >>> processor = AutoProcessor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
-        >>> model = AutoModelForTokenClassification.from_pretrained("microsoft/layoutlmv3-base", num_labels=7)
-        >>> dataset = load_dataset("nielsr/funsd-layoutlmv3", split="train")
+        >>> processor = AutoProcessor.from_pretrained("microsoft/DisentLM-base", apply_ocr=False)
+        >>> model = AutoModelForTokenClassification.from_pretrained("microsoft/DisentLM-base", num_labels=7)
+        >>> dataset = load_dataset("nielsr/funsd-DisentLM", split="train")
         >>> example = dataset[0]
         >>> image = example["image"]
         >>> words = example["tokens"]
@@ -1210,7 +1210,7 @@ class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.layoutlmv3(
+        outputs = self.DisentLM(
             input_ids,
             bbox=bbox,
             attention_mask=attention_mask,
@@ -1253,13 +1253,13 @@ class LayoutLMv3ForTokenClassification(LayoutLMv3PreTrainedModel):
 
 @add_start_docstrings(
     """
-    LayoutLMv3 Model with a span classification head on top for extractive question-answering tasks such as
+    DisentLM Model with a span classification head on top for extractive question-answering tasks such as
     [DocVQA](https://rrc.cvc.uab.es/?ch=17) (a linear layer on top of the text part of the hidden-states output to
     compute `span start logits` and `span end logits`).
     """,
-    LAYOUTLMV3_START_DOCSTRING,
+    DisentLM_START_DOCSTRING,
 )
-class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
+class DisentLMForQuestionAnswering(DisentLMPreTrainedModel):
     _keys_to_ignore_on_load_unexpected = [r"pooler"]
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
@@ -1267,13 +1267,13 @@ class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        self.layoutlmv3 = LayoutLMv3Model(config)
-        self.qa_outputs = LayoutLMv3ClassificationHead(config, pool_feature=False)
+        self.DisentLM = DisentLMModel(config)
+        self.qa_outputs = DisentLMClassificationHead(config, pool_feature=False)
 
         self.init_weights()
 
     @add_start_docstrings_to_model_forward(
-        LAYOUTLMV3_DOWNSTREAM_INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        DisentLM_DOWNSTREAM_INPUTS_DOCSTRING.format("batch_size, sequence_length")
     )
     @replace_return_docstrings(output_type=QuestionAnsweringModelOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
@@ -1307,9 +1307,9 @@ class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
         >>> from transformers import AutoProcessor, AutoModelForQuestionAnswering
         >>> from datasets import load_dataset
         >>> import torch
-        >>> processor = AutoProcessor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
-        >>> model = AutoModelForQuestionAnswering.from_pretrained("microsoft/layoutlmv3-base")
-        >>> dataset = load_dataset("nielsr/funsd-layoutlmv3", split="train")
+        >>> processor = AutoProcessor.from_pretrained("microsoft/DisentLM-base", apply_ocr=False)
+        >>> model = AutoModelForQuestionAnswering.from_pretrained("microsoft/DisentLM-base")
+        >>> dataset = load_dataset("nielsr/funsd-DisentLM", split="train")
         >>> example = dataset[0]
         >>> image = example["image"]
         >>> question = "what's his name?"
@@ -1326,7 +1326,7 @@ class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.layoutlmv3(
+        outputs = self.DisentLM(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -1379,26 +1379,26 @@ class LayoutLMv3ForQuestionAnswering(LayoutLMv3PreTrainedModel):
 
 @add_start_docstrings(
     """
-    LayoutLMv3 Model with a sequence classification head on top (a linear layer on top of the final hidden state of the
+    DisentLM Model with a sequence classification head on top (a linear layer on top of the final hidden state of the
     [CLS] token) e.g. for document image classification tasks such as the
     [RVL-CDIP](https://www.cs.cmu.edu/~aharley/rvl-cdip/) dataset.
     """,
-    LAYOUTLMV3_START_DOCSTRING,
+    DisentLM_START_DOCSTRING,
 )
-class LayoutLMv3ForSequenceClassification(LayoutLMv3PreTrainedModel):
+class DisentLMForSequenceClassification(DisentLMPreTrainedModel):
     _keys_to_ignore_on_load_missing = [r"position_ids"]
 
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
-        self.layoutlmv3 = LayoutLMv3Model(config)
-        self.classifier = LayoutLMv3ClassificationHead(config, pool_feature=False)
+        self.DisentLM = DisentLMModel(config)
+        self.classifier = DisentLMClassificationHead(config, pool_feature=False)
 
         self.init_weights()
 
     @add_start_docstrings_to_model_forward(
-        LAYOUTLMV3_DOWNSTREAM_INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        DisentLM_DOWNSTREAM_INPUTS_DOCSTRING.format("batch_size, sequence_length")
     )
     @replace_return_docstrings(output_type=SequenceClassifierOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
@@ -1423,9 +1423,9 @@ class LayoutLMv3ForSequenceClassification(LayoutLMv3PreTrainedModel):
         >>> from transformers import AutoProcessor, AutoModelForSequenceClassification
         >>> from datasets import load_dataset
         >>> import torch
-        >>> processor = AutoProcessor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
-        >>> model = AutoModelForSequenceClassification.from_pretrained("microsoft/layoutlmv3-base")
-        >>> dataset = load_dataset("nielsr/funsd-layoutlmv3", split="train")
+        >>> processor = AutoProcessor.from_pretrained("microsoft/DisentLM-base", apply_ocr=False)
+        >>> model = AutoModelForSequenceClassification.from_pretrained("microsoft/DisentLM-base")
+        >>> dataset = load_dataset("nielsr/funsd-DisentLM", split="train")
         >>> example = dataset[0]
         >>> image = example["image"]
         >>> words = example["tokens"]
@@ -1438,7 +1438,7 @@ class LayoutLMv3ForSequenceClassification(LayoutLMv3PreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        outputs = self.layoutlmv3(
+        outputs = self.DisentLM(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
