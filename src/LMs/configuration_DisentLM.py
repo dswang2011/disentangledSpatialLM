@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" LayoutLMv3 model configuration"""
+""" DisentLM model configuration"""
 
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Mapping, Optional
@@ -32,23 +32,23 @@ if TYPE_CHECKING:
 
 logger = logging.get_logger(__name__)
 
-LAYOUTLMV3_PRETRAINED_CONFIG_ARCHIVE_MAP = {
-    "microsoft/layoutlmv3-base": "https://huggingface.co/microsoft/layoutlmv3-base/resolve/main/config.json",
+DisentLM_PRETRAINED_CONFIG_ARCHIVE_MAP = {
+    "microsoft/DisentLM-base": "https://huggingface.co/microsoft/DisentLM-base/resolve/main/config.json",
 }
 
 
-class LayoutLMv3Config(PretrainedConfig):
+class DisentLMConfig(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`LayoutLMv3Model`]. It is used to instantiate an
-    LayoutLMv3 model according to the specified arguments, defining the model architecture. Instantiating a
-    configuration with the defaults will yield a similar configuration to that of the LayoutLMv3
-    [microsoft/layoutlmv3-base](https://huggingface.co/microsoft/layoutlmv3-base) architecture.
+    This is the configuration class to store the configuration of a [`DisentLMModel`]. It is used to instantiate an
+    DisentLM model according to the specified arguments, defining the model architecture. Instantiating a
+    configuration with the defaults will yield a similar configuration to that of the DisentLM
+    [microsoft/DisentLM-base](https://huggingface.co/microsoft/DisentLM-base) architecture.
     Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
     documentation from [`PretrainedConfig`] for more information.
     Args:
         vocab_size (`int`, *optional*, defaults to 50265):
-            Vocabulary size of the LayoutLMv3 model. Defines the number of different tokens that can be represented by
-            the `inputs_ids` passed when calling [`LayoutLMv3Model`].
+            Vocabulary size of the DisentLM model. Defines the number of different tokens that can be represented by
+            the `inputs_ids` passed when calling [`DisentLMModel`].
         hidden_size (`int`, *optional*, defaults to 768):
             Dimension of the encoder layers and the pooler layer.
         num_hidden_layers (`int`, *optional*, defaults to 12):
@@ -68,7 +68,7 @@ class LayoutLMv3Config(PretrainedConfig):
             The maximum sequence length that this model might ever be used with. Typically set this to something large
             just in case (e.g., 512 or 1024 or 2048).
         type_vocab_size (`int`, *optional*, defaults to 2):
-            The vocabulary size of the `token_type_ids` passed when calling [`LayoutLMv3Model`].
+            The vocabulary size of the `token_type_ids` passed when calling [`DisentLMModel`].
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         layer_norm_eps (`float`, *optional*, defaults to 1e-5):
@@ -104,15 +104,15 @@ class LayoutLMv3Config(PretrainedConfig):
             The dropout ratio for the classification head.
     Example:
     ```python
-    >>> from transformers import LayoutLMv3Config, LayoutLMv3Model
-    >>> # Initializing a LayoutLMv3 microsoft/layoutlmv3-base style configuration
-    >>> configuration = LayoutLMv3Config()
-    >>> # Initializing a model (with random weights) from the microsoft/layoutlmv3-base style configuration
-    >>> model = LayoutLMv3Model(configuration)
+    >>> from transformers import DisentLMConfig, DisentLMModel
+    >>> # Initializing a DisentLM microsoft/DisentLM-base style configuration
+    >>> configuration = DisentLMConfig()
+    >>> # Initializing a model (with random weights) from the microsoft/DisentLM-base style configuration
+    >>> model = DisentLMModel(configuration)
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
-    model_type = "layoutlmv3"
+    model_type = "DisentLM"
 
     def __init__(
         self,
@@ -183,7 +183,7 @@ class LayoutLMv3Config(PretrainedConfig):
         self.classifier_dropout = classifier_dropout
 
 
-class LayoutLMv3OnnxConfig(OnnxConfig):
+class DisentLMOnnxConfig(OnnxConfig):
     torch_onnx_minimum_version = version.parse("1.12")
 
     @property

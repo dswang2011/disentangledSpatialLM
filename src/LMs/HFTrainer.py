@@ -172,6 +172,11 @@ class MyTrainer:
         }
 
     def compute_metrics(self, p):
+        # sequence classification 
+        if self.opt.task_type == 'sequence-classifier':
+            return self.acc_and_f1(p)
+        
+        # token classification
         metric = evaluate.load("seqeval")
 
         predictions, labels = p
