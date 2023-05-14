@@ -393,7 +393,7 @@ class DisentLMSelfAttention(nn.Module):
         head_mask=None,
         output_attentions=True,
         rel_pos=None,
-        rel_2d_pos=None,
+        spatial_attention = None
     ):
         mixed_query_layer = self.query(hidden_states)
 
@@ -406,13 +406,12 @@ class DisentLMSelfAttention(nn.Module):
         # Changing the computational order into QT(K/√d) alleviates the problem. (https://arxiv.org/pdf/2105.13290.pdf)
         attention_scores = torch.matmul(query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
 
-        if self.has_relative_attention_bias and self.has_spatial_attention_bias:
-            attention_scores += (rel_pos + rel_2d_pos) / math.sqrt(self.attention_head_size)
+        if self.has_relative_attention_bias and rel_pos is not None and spatial_attention is not None:
+            attention_scores += (rel_pos + spatial_attention) / math.sqrt(self.attention_head_size)
         elif self.has_relative_attention_bias and rel_pos is not None:
             attention_scores += rel_pos / math.sqrt(self.attention_head_size)
-        elif self.has_spatial_attention_bias and rel_2d_pos is not None:
-            attention_scores += rel_2d_pos / math.sqrt(self.attention_head_size)
-            # attention_scores += rel_2d_pos
+        elif spatial_attention is not None:
+            attention_scores += spatial_attention / math.sqrt(self.attention_head_size)
 
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
@@ -471,7 +470,6 @@ class DisentLMAttention(nn.Module):
         head_mask=None,
         output_attentions=False,
         rel_pos=None,
-        rel_2d_pos=None,
     ):         
         # add spatial attention result here
         spatial_outputs = self.self(
@@ -489,14 +487,13 @@ class DisentLMAttention(nn.Module):
             hidden_states,
             attention_mask,
             head_mask,
-            output_attentions=False,    # not necessary
+            output_attentions=output_attentions,    # not necessary
             rel_pos=rel_pos,
             spatial_attention=spatial_attention, # here it is the important change, for assisted attention!
         )
 
-        attention_output_spatial = self.output(spatial_outputs[0], rel_2d_pos)  # add & norm1;  
+        attention_output_spatial = self.output(spatial_outputs[0], hidden_states_spatial)  # add & norm1;  
         attention_output = self.output(self_outputs[0], hidden_states)  # add & norm1;  
-
         
         outputs = (attention_output,attention_output_spatial) + self_outputs[1:] + spatial_outputs[1:]  # add attentions if we output them
         return outputs
@@ -533,7 +530,7 @@ class DisentLMLayer(nn.Module):
         attention_output = self_attention_outputs[0]
         attention_output_spatial = self_attention_outputs[1]    # spatial one
 
-        outputs = self_attention_outputs[2:]  # add self attentions if we output attention weights
+        attention_scores = self_attention_outputs[2:]  # add self attentions if we output attention weights
 
         layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
@@ -542,7 +539,7 @@ class DisentLMLayer(nn.Module):
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output_spatial
         )
 
-        outputs = (layer_output,layer_output_spatial) + outputs
+        outputs = (layer_output,layer_output_spatial) + attention_scores
 
         return outputs
 
@@ -687,7 +684,7 @@ class DisentLMEncoder(nn.Module):
                 hidden_states += hidden_states_spatial
 
             if output_attentions:
-                all_self_attentions = all_self_attentions + (layer_outputs[1],)
+                all_self_attentions = all_self_attentions + (layer_outputs[2],) # change to the third one
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -898,7 +895,7 @@ class DisentLMModel(DisentLMPreTrainedModel):
             if bbox is None:
                 bbox = torch.zeros(tuple(list(input_shape) + [4]), dtype=torch.long, device=device)
 
-            embedding_output, spatial_embed_output = self.embeddings(
+            embedding_output, embed_output_spatial = self.embeddings(
                 input_ids=input_ids,
                 bbox=bbox,
                 position_ids=position_ids,
@@ -967,7 +964,7 @@ class DisentLMModel(DisentLMPreTrainedModel):
 
         encoder_outputs = self.encoder(
             embedding_output,
-            spatial_embed_output,
+            embed_output_spatial,
             bbox=final_bbox,
             position_ids=final_position_ids,
             attention_mask=extended_attention_mask,
