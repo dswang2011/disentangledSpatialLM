@@ -48,6 +48,18 @@ def setup(opt):
             config = SpatialLMConfig.from_pretrained(opt.checkpoint_path)
             config.spatial_attention = opt.spatial_attention
             model = SpatialLMForDocVQA.from_pretrained(opt.checkpoint_path, config = config)
+    elif opt.network_type == 'disentlm':
+        if opt.task_type == 'mlm':
+            # from_pretrained is put inside or outside
+            if 'checkpoint_path' in opt.__dict__.keys():
+                print('== load from the checkpoint === ', opt.checkpoint_path)
+                config = SpatialLMConfig.from_pretrained(opt.checkpoint_path)   # borrow config
+                model = SpatialLMForMaskedLM.from_pretrained(opt.checkpoint_path, config = config)
+            else:
+                # the first time, we first start from layoutlm; put layoutlm_dir
+                print('=== load the first time from layoutlmv3 ===')
+                config = AutoConfig.from_pretrained(opt.layoutlm_dir)   # borrow config
+                model = SpatialLMForMaskedLM(config=config, start_dir_path=opt.layoutlm_dir)
     else:
         raise Exception('model not supported:{}'.format(opt.network_type))
 

@@ -135,11 +135,11 @@ class DisentLMConfig(PretrainedConfig):
         coordinate_size=128,
         shape_size=128,
         has_relative_attention_bias=True,
+        embed_mode='embed',
         rel_pos_bins=32,
         max_rel_pos=128,
         rel_2d_pos_bins=64,
         max_rel_2d_pos=256,
-        has_spatial_attention_bias=True,
         text_embed=True,
         visual_embed=True,
         input_size=224,
@@ -172,7 +172,6 @@ class DisentLMConfig(PretrainedConfig):
         self.has_relative_attention_bias = has_relative_attention_bias
         self.rel_pos_bins = rel_pos_bins
         self.max_rel_pos = max_rel_pos
-        self.has_spatial_attention_bias = has_spatial_attention_bias
         self.rel_2d_pos_bins = rel_2d_pos_bins
         self.max_rel_2d_pos = max_rel_2d_pos
         self.text_embed = text_embed
