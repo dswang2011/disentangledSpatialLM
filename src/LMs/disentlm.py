@@ -314,11 +314,13 @@ class DisentLMTextEmbeddings(nn.Module):
 
         spatial_position_embeddings = self.calculate_spatial_position_embeddings(bbox)
 
-        embeddings = embeddings + spatial_position_embeddings
-
-        embeddings = self.LayerNorm(embeddings)
-        embeddings = self.dropout(embeddings)
-
+        if self.config.embed_mode=='attention':
+            embeddings = embeddings + spatial_position_embeddings
+            embeddings = self.LayerNorm(embeddings)
+            embeddings = self.dropout(embeddings)
+        elif self.config.embed_mode not in ['embed','both']:
+            print('==wrong mode==')
+            return 
         return embeddings, spatial_position_embeddings
 
 
@@ -461,6 +463,10 @@ class DisentLMAttention(nn.Module):
         self.self = DisentLMSelfAttention(config)
         self.output = DisentLMSelfOutput(config)
 
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+
     def forward(
         self,
         hidden_states,
@@ -477,10 +483,22 @@ class DisentLMAttention(nn.Module):
             head_mask,
             output_attentions=True,    # return attentions
         )
+
+        # 1 attention_mode
         if config.entangle_mode in ['att','both']:
             spatial_attention = spatial_outputs[1:]
         else:
             spatial_attention = None
+
+        # 2 embed_mode, add before next layer
+        if self.config.entangle_mode in ['both','embed']:
+            # embeddings = embeddings + spatial_position_embeddings
+            # embeddings = self.LayerNorm(embeddings)
+            # embeddings = self.dropout(embeddings)
+            hidden_states += hidden_states_spatial
+            hidden_states = self.LayerNorm(hidden_states)
+            hidden_states = self.dropout(hidden_states)
+
         # incorporate the attention 
         self_outputs = self.self(
             hidden_states,
@@ -677,10 +695,6 @@ class DisentLMEncoder(nn.Module):
                 )
             hidden_states = layer_outputs[0]
             hidden_states_spatial = layer_outputs[1]    # 
-
-            # embed mode, add before next layer
-            if self.config.entangle_mode in ['both','embed']:
-                hidden_states += hidden_states_spatial
 
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[2],) # change to the third one
