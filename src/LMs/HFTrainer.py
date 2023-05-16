@@ -43,9 +43,9 @@ class MyTrainer:
             save_strategy="steps",  # steps, epoch
             overwrite_output_dir=True,  # use only one dir
             prediction_loss_only = True,
-            logging_dir='./logs',  
-            log_level = 'info', # ‘debug’, ‘info’, ‘warning’, ‘error’ and ‘critical’, 
-            logging_strategy = 'epoch', # epoch, step, no
+            # logging_dir='./logs',  
+            # log_level = 'info', # ‘debug’, ‘info’, ‘warning’, ‘error’ and ‘critical’, 
+            # logging_strategy = 'epoch', # epoch, step, no
 
             save_steps=2000,
         )
@@ -75,7 +75,7 @@ class MyTrainer:
             per_device_eval_batch_size = opt.batch_size,
             # weight_decay = 0.01,
             # warmup_ratio = 0.05,
-            # fp16 = True,    # make it train fast
+            fp16 = True,    # make it train fast
             push_to_hub = False,
             # push_to_hub_model_id = f"layoutlmv3-finetuned-cord"        
             evaluation_strategy = "epoch",
