@@ -39,10 +39,14 @@ if __name__=='__main__':
     model = LMs.setup(params).to(params.device)
     # model = LMs.setup(params)
 
+    # confirm: to be saved path:
+    print(params.checkpoint_save_path)
+    print(params.save_path)
+    
     # section 4, data and saving path for output model
     mydata = mydataset.setup(params)
 
-    # section 5, pretrain
+    # # section 5, pretrain
     mytrainer = MyTrainer(params)
     mytrainer.pretrain(params, model, mydata)
 

@@ -43,7 +43,7 @@ class MyTrainer:
             save_strategy="steps",  # steps, epoch
             overwrite_output_dir=True,  # use only one dir
             prediction_loss_only = True,
-            # logging_dir='./logs',  
+            logging_dir='./logs',  
             # log_level = 'info', # ‘debug’, ‘info’, ‘warning’, ‘error’ and ‘critical’, 
             # logging_strategy = 'epoch', # epoch, step, no
 
