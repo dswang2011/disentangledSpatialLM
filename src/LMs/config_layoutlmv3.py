@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-""" DisentLM model configuration"""
+""" LayoutLMv3 model configuration"""
 
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Mapping, Optional
@@ -26,29 +26,31 @@ from transformers.utils import logging
 
 
 if TYPE_CHECKING:
-    from transformers.processing_utils import ProcessorMixin
-    from transformers.utils import TensorType
+    from ...processing_utils import ProcessorMixin
+    from ...utils import TensorType
 
 
 logger = logging.get_logger(__name__)
 
-DisentLM_PRETRAINED_CONFIG_ARCHIVE_MAP = {
-    "microsoft/DisentLM-base": "https://huggingface.co/microsoft/DisentLM-base/resolve/main/config.json",
+LAYOUTLMV3_PRETRAINED_CONFIG_ARCHIVE_MAP = {
+    "microsoft/layoutlmv3-base": "https://huggingface.co/microsoft/layoutlmv3-base/resolve/main/config.json",
 }
 
 
-class DisentLMConfig(PretrainedConfig):
+class LayoutLMv3Config(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`DisentLMModel`]. It is used to instantiate an
-    DisentLM model according to the specified arguments, defining the model architecture. Instantiating a
-    configuration with the defaults will yield a similar configuration to that of the DisentLM
-    [microsoft/DisentLM-base](https://huggingface.co/microsoft/DisentLM-base) architecture.
+    This is the configuration class to store the configuration of a [`LayoutLMv3Model`]. It is used to instantiate an
+    LayoutLMv3 model according to the specified arguments, defining the model architecture. Instantiating a
+    configuration with the defaults will yield a similar configuration to that of the LayoutLMv3
+    [microsoft/layoutlmv3-base](https://huggingface.co/microsoft/layoutlmv3-base) architecture.
+
     Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
     documentation from [`PretrainedConfig`] for more information.
+
     Args:
         vocab_size (`int`, *optional*, defaults to 50265):
-            Vocabulary size of the DisentLM model. Defines the number of different tokens that can be represented by
-            the `inputs_ids` passed when calling [`DisentLMModel`].
+            Vocabulary size of the LayoutLMv3 model. Defines the number of different tokens that can be represented by
+            the `inputs_ids` passed when calling [`LayoutLMv3Model`].
         hidden_size (`int`, *optional*, defaults to 768):
             Dimension of the encoder layers and the pooler layer.
         num_hidden_layers (`int`, *optional*, defaults to 12):
@@ -68,7 +70,7 @@ class DisentLMConfig(PretrainedConfig):
             The maximum sequence length that this model might ever be used with. Typically set this to something large
             just in case (e.g., 512 or 1024 or 2048).
         type_vocab_size (`int`, *optional*, defaults to 2):
-            The vocabulary size of the `token_type_ids` passed when calling [`DisentLMModel`].
+            The vocabulary size of the `token_type_ids` passed when calling [`LayoutLMv3Model`].
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         layer_norm_eps (`float`, *optional*, defaults to 1e-5):
@@ -102,17 +104,22 @@ class DisentLMConfig(PretrainedConfig):
             The size (resolution) of the patches.
         classifier_dropout (`float`, *optional*):
             The dropout ratio for the classification head.
+
     Example:
+
     ```python
-    >>> from transformers import DisentLMConfig, DisentLMModel
-    >>> # Initializing a DisentLM microsoft/DisentLM-base style configuration
-    >>> configuration = DisentLMConfig()
-    >>> # Initializing a model (with random weights) from the microsoft/DisentLM-base style configuration
-    >>> model = DisentLMModel(configuration)
+    >>> from transformers import LayoutLMv3Config, LayoutLMv3Model
+
+    >>> # Initializing a LayoutLMv3 microsoft/layoutlmv3-base style configuration
+    >>> configuration = LayoutLMv3Config()
+
+    >>> # Initializing a model (with random weights) from the microsoft/layoutlmv3-base style configuration
+    >>> model = LayoutLMv3Model(configuration)
+
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
-    model_type = "DisentLM"
+    model_type = "layoutlmv3"
 
     def __init__(
         self,
@@ -135,11 +142,11 @@ class DisentLMConfig(PretrainedConfig):
         coordinate_size=128,
         shape_size=128,
         has_relative_attention_bias=True,
-        embed_mode='embed',
         rel_pos_bins=32,
         max_rel_pos=128,
         rel_2d_pos_bins=64,
         max_rel_2d_pos=256,
+        has_spatial_attention_bias=True,
         text_embed=True,
         visual_embed=True,
         input_size=224,
@@ -172,6 +179,7 @@ class DisentLMConfig(PretrainedConfig):
         self.has_relative_attention_bias = has_relative_attention_bias
         self.rel_pos_bins = rel_pos_bins
         self.max_rel_pos = max_rel_pos
+        self.has_spatial_attention_bias = has_spatial_attention_bias
         self.rel_2d_pos_bins = rel_2d_pos_bins
         self.max_rel_2d_pos = max_rel_2d_pos
         self.text_embed = text_embed
@@ -182,7 +190,7 @@ class DisentLMConfig(PretrainedConfig):
         self.classifier_dropout = classifier_dropout
 
 
-class DisentLMOnnxConfig(OnnxConfig):
+class LayoutLMv3OnnxConfig(OnnxConfig):
     torch_onnx_minimum_version = version.parse("1.12")
 
     @property
@@ -228,6 +236,7 @@ class DisentLMOnnxConfig(OnnxConfig):
     ) -> Mapping[str, Any]:
         """
         Generate inputs to provide to the ONNX exporter for the specific framework
+
         Args:
             processor ([`ProcessorMixin`]):
                 The processor associated with this model configuration.
@@ -245,6 +254,7 @@ class DisentLMOnnxConfig(OnnxConfig):
                 The width of the generated images.
             image_height (`int`, *optional*, defaults to 40):
                 The height of the generated images.
+
         Returns:
             Mapping[str, Any]: holding the kwargs to provide to the model's forward function
         """

@@ -29,9 +29,9 @@ class FUNSD:
         # step 2.1: get raw ds (already normalized bbox, img object)
         raw_train, raw_test = self.get_raw_ds()
         # step 2.2, get  labeled ds (get label list, and map label dataset)
-        _,_, opt.label_list = self._get_label_map(raw_train)
+        opt.id2label, opt.label2id, opt.label_list = self._get_label_map(raw_train)
         opt.num_labels = len(opt.label_list)
-        self.class_label = ClassLabel(num_classes=opt.num_labels, names = opt.label_list)
+        # self.class_label = ClassLabel(num_classes=opt.num_labels, names = opt.label_list)
         '''
         {0: 'B-ANSWER', 1: 'B-HEADER', 2: 'B-QUESTION', 3: 'I-ANSWER', 4: 'I-HEADER', 5: 'I-QUESTION', 6: 'O'}
         {'B-ANSWER': 0, 'B-HEADER': 1, 'B-QUESTION': 2, 'I-ANSWER': 3, 'I-HEADER': 4, 'I-QUESTION': 5, 'O': 6}
@@ -109,7 +109,7 @@ class FUNSD:
                 bboxes.extend(cur_line_bboxes)
                 block_idx += 1
 
-            yield {"id": doc_idx, "tokens": tokens,"bboxes": bboxes, "ner_tags": ner_tags,
+            yield {"id": doc_idx, "tokens": tokens,"bboxes": bboxes, 'tboxes':tboxes, "ner_tags": ner_tags,
                    "block_ids": block_ids, "image": image}
         # one_page_info = {'tokens': [], 'tboxes': [], 'bboxes': [], 'block_ids':[], 'image': image_path}
 
@@ -117,7 +117,7 @@ class FUNSD:
     def get_preprocessed_ds(self,ds):
         def _preprocess(batch):
             # 1) encode words and imgs
-            encodings = self.processor(images=batch['image'],text=batch['tokens'], boxes=batch['bboxes'],
+            encodings = self.processor(images=batch['image'],text=batch['tokens'], boxes=batch['tboxes'],
                                        word_labels=batch['ner_tags'], truncation=True, padding='max_length', max_length=self.opt.max_seq_len)
             # 2) add position_ids
             position_ids = []
@@ -128,12 +128,12 @@ class FUNSD:
             encodings['position_ids'] = position_ids
 
             # 3) add spatial attention
-            spatial_matrix = []
-            for i, bb in enumerate(encodings['bbox']):
-                word_ids = encodings.word_ids(i)
-                sm = myds_util._fully_spatial_matrix(bb, word_ids)
-                spatial_matrix.append(sm)
-            encodings['spatial_matrix'] = spatial_matrix
+            # spatial_matrix = []
+            # for i, bb in enumerate(encodings['bbox']):
+            #     word_ids = encodings.word_ids(i)
+            #     sm = myds_util._fully_spatial_matrix(bb, word_ids)
+            #     spatial_matrix.append(sm)
+            # encodings['spatial_matrix'] = spatial_matrix
 
             return encodings
 
@@ -144,7 +144,7 @@ class FUNSD:
             'position_ids': Sequence(feature=Value(dtype='int64')),
             'attention_mask': Sequence(Value(dtype='int64')),
             'bbox': Array2D(dtype="int64", shape=(512, 4)),
-            'spatial_matrix': Array3D(dtype='float32', shape=(512, 512, 11)),     # 
+            # 'spatial_matrix': Array3D(dtype='float32', shape=(512, 512, 11)),     # 
             'labels': Sequence(feature=Value(dtype='int64')),
         })
         # processed_ds = ds.map(_preprocess, batched=True, num_proc=self.cpu_num, 
@@ -158,7 +158,7 @@ class FUNSD:
 
     def get_label_ds(self,ds):
         def map_label2id(sample):
-            sample['ner_tags'] = [self.class_label.str2int(ner_label) for ner_label in sample['ner_tags']]
+            sample['ner_tags'] = [self.opt.label2id[ner_label] for ner_label in sample['ner_tags']]
             return sample
         label_ds = ds.map(map_label2id, num_proc=os.cpu_count())
         return label_ds

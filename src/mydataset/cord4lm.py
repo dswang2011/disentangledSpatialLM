@@ -66,6 +66,7 @@ class CORD:
             # print('---doc id:---',doc_idx)
             tokens = []
             bboxes = []
+            tboxes = []
             ner_tags = []
             block_ids = []
 
@@ -87,22 +88,28 @@ class CORD:
                         tokens.append(w["text"])
                         block_ids.append(block_idx)
                         ner_tags.append("O")
-                        cur_line_bboxes.append(self._quad_to_box(w["quad"]))
+                        t_box = self._quad_to_box(w["quad"])
+                        tboxes.append(t_box)
+                        cur_line_bboxes.append(t_box)
                 else:
                     tokens.append(words[0]["text"])
                     block_ids.append(block_idx)
                     ner_tags.append("B-" + label.upper())
-                    cur_line_bboxes.append(self._quad_to_box(words[0]["quad"]))
+                    t_box = self._quad_to_box(words[0]["quad"])
+                    tboxes.append(t_box)
+                    cur_line_bboxes.append(t_box)
                     for w in words[1:]:
                         tokens.append(w["text"])
                         block_ids.append(block_idx)
                         ner_tags.append("I-" + label.upper())
-                        cur_line_bboxes.append(self._quad_to_box(w["quad"]))
+                        t_box = self._quad_to_box(w["quad"])
+                        tboxes.append(t_box)
+                        cur_line_bboxes.append(t_box)
                 cur_line_bboxes = self._get_line_bbox(cur_line_bboxes)  # shared boxes, token-wise
                 bboxes.extend(cur_line_bboxes)
                 block_idx += 1
 
-            yield {"id": doc_idx, "tokens": tokens, "bboxes": bboxes, "ner_tags": ner_tags,
+            yield {"id": doc_idx, "tokens": tokens, "bboxes": bboxes,"tboxes": tboxes, "ner_tags": ner_tags,
                    "block_ids": block_ids, "image": image_path}
         # one_page_info = {'tokens': [], 'tboxes': [], 'bboxes': [], 'block_ids':[], 'image': image_path}
 
@@ -129,15 +136,6 @@ class CORD:
                 rel_pos = self._get_rel_pos(word_ids, block_ids)
                 position_ids.append(rel_pos)
             encodings['position_ids'] = position_ids
-
-            # 3) add spatial attention
-            spatial_matrix = []
-            for i, bb in enumerate(encodings['bbox']):
-                word_ids = encodings.word_ids(i)
-                sm = myds_util._fully_spatial_matrix(bb, word_ids)
-                spatial_matrix.append(sm)
-            encodings['spatial_matrix'] = spatial_matrix
-            
             return encodings
 
         features = Features({
@@ -146,7 +144,6 @@ class CORD:
             'position_ids': Sequence(feature=Value(dtype='int64')),
             'attention_mask': Sequence(Value(dtype='int64')),
             'bbox': Array2D(dtype="int64", shape=(512, 4)),
-            'spatial_matrix': Array3D(dtype='float32', shape=(512, 512, 11)),     # 
             'labels': Sequence(feature=Value(dtype='int64')),
         })
         # processed_ds = ds.map(_preprocess, batched=True, num_proc=self.cpu_num, 

@@ -4,7 +4,8 @@ import torch.nn as nn
 
 # from transformers import RobertaModel, RobertaConfig
 from transformers import LayoutLMForTokenClassification, AutoModelForTokenClassification
-from transformers import AutoModelForQuestionAnswering
+from LMs.layoutlmv3 import LayoutLMv3ForTokenClassification
+from transformers import AutoModelForQuestionAnswering, AutoConfig
 
 
 class LayoutLM4DocVQA(nn.Module):
@@ -40,7 +41,12 @@ class LayoutLMTokenclassifier(nn.Module):
         self.opt = opt
         # self.config = RobertaConfig.from_pretrained(opt.roberta_dir)
         # self.roberta = RobertaModel(self.config)
-        self.layoutlm = AutoModelForTokenClassification.from_pretrained(opt.layoutlm_dir, num_labels=opt.num_labels, label2id=opt.label2id, id2label=opt.id2label)
+        self.config = AutoConfig.from_pretrained(opt.layoutlm_dir)
+        self.config.visual_embed = False
+        self.config.num_labels = opt.num_labels
+        print('== vis == ', self.config.visual_embed)
+        # self.layoutlm = AutoModelForTokenClassification.from_pretrained(opt.layoutlm_dir, config = self.config, num_labels=opt.num_labels, label2id=opt.label2id, id2label=opt.id2label)
+        self.layoutlm = LayoutLMv3ForTokenClassification.from_pretrained(opt.layoutlm_dir, config = self.config)
 
         # freeze the bert model
         if freeze_bert:

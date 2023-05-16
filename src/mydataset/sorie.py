@@ -105,30 +105,30 @@ class SORIE:
             encodings = self.processor(images=batch['images'],text=batch['tokens'], boxes=batch['bboxes'],
                                        word_labels=batch['labels'], truncation=True, padding='max_length', max_length=self.opt.max_seq_len)
             # 2) add position_ids
-            position_ids = []
-            for i, block_ids in enumerate(batch['block_ids']):
-                word_ids = encodings.word_ids(i)
-                rel_pos = self._get_rel_pos(word_ids, block_ids)
-                position_ids.append(rel_pos)
-            encodings['position_ids'] = position_ids
+            # position_ids = []
+            # for i, block_ids in enumerate(batch['block_ids']):
+            #     word_ids = encodings.word_ids(i)
+            #     rel_pos = self._get_rel_pos(word_ids, block_ids)
+            #     position_ids.append(rel_pos)
+            # encodings['position_ids'] = position_ids
 
             # 3) add spatial attention
-            spatial_matrix = []
-            for i, bb in enumerate(encodings['bbox']):
-                word_ids = encodings.word_ids(i)
-                sm = myds_util._fully_spatial_matrix(bb, word_ids)
-                spatial_matrix.append(sm)
-            encodings['spatial_matrix'] = spatial_matrix
+            # spatial_matrix = []
+            # for i, bb in enumerate(encodings['bbox']):
+            #     word_ids = encodings.word_ids(i)
+            #     sm = myds_util._fully_spatial_matrix(bb, word_ids)
+            #     spatial_matrix.append(sm)
+            # encodings['spatial_matrix'] = spatial_matrix
             
             return encodings
 
         features = Features({
             'pixel_values': Array3D(dtype="float32", shape=(3, 224, 224)),
             'input_ids': Sequence(feature=Value(dtype='int64')),
-            'position_ids': Sequence(feature=Value(dtype='int64')),
+            # 'position_ids': Sequence(feature=Value(dtype='int64')),
             'attention_mask': Sequence(Value(dtype='int64')),
             'bbox': Array2D(dtype="int64", shape=(512, 4)),
-            'spatial_matrix': Array3D(dtype='float32', shape=(512, 512, 11)),     # 
+            # 'spatial_matrix': Array3D(dtype='float32', shape=(512, 512, 11)),     # 
             'labels': Sequence(feature=Value(dtype='int64')),
         })
         # processed_ds = ds.map(_preprocess, batched=True, num_proc=self.cpu_num, 

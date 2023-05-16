@@ -43,7 +43,7 @@ if __name__=='__main__':
     mydata = mydataset.setup(params)
 
     # section 5, pretrain
-    # mytrainer = MyTrainer(params)
-    # mytrainer.pretrain(params, model, mydata)
+    mytrainer = MyTrainer(params)
+    mytrainer.pretrain(params, model, mydata)
 
 

@@ -35,7 +35,7 @@ from transformers.modeling_outputs import (
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
-from LMs.configuration_layoutlmv3 import LayoutLMv3Config
+from LMs.config_layoutlmv3 import LayoutLMv3Config
 
 
 logger = logging.get_logger(__name__)
@@ -765,11 +765,11 @@ class LayoutLMv3Encoder(nn.Module):
 
         rel_pos = self._cal_1d_pos_emb(hidden_states, position_ids) if self.has_relative_attention_bias else None
         
-        if bool(self.config.spatial_attention):
-            rel_2d_pos = self._cal_2d_spatial_attention(spatial_matrix, bbox, device)
-            # rel_2d_pos = self._cal_2d_spatial_sa(spatial_matrix,bbox, device)
-        else:
-            rel_2d_pos = self._cal_2d_pos_emb(hidden_states, bbox) if self.has_spatial_attention_bias else None
+        # if bool(self.config.spatial_attention):
+        #     rel_2d_pos = self._cal_2d_spatial_attention(spatial_matrix, bbox, device)
+        #     # rel_2d_pos = self._cal_2d_spatial_sa(spatial_matrix,bbox, device)
+        # else:
+        rel_2d_pos = self._cal_2d_pos_emb(hidden_states, bbox) if self.has_spatial_attention_bias else None
         
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
@@ -1099,7 +1099,7 @@ class LayoutLMv3Model(LayoutLMv3PreTrainedModel):
             return_dict=return_dict,
             patch_height=patch_height,
             patch_width=patch_width,
-            spatial_matrix=spatial_matrix,
+            # spatial_matrix=spatial_matrix,
             device = device,
         )
 

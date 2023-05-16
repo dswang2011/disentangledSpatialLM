@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
+from transformers.activations import gelu  # ACT2FN
 
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
@@ -31,11 +31,12 @@ from transformers.modeling_outputs import (
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
+    MaskedLMOutput
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import apply_chunking_to_forward
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
-from LMs.configuration_DisentLM import DisentLMConfig
+from LMs.config_DisentLM import DisentLMConfig
 
 
 logger = logging.get_logger(__name__)
@@ -209,6 +210,8 @@ class DisentLMTextEmbeddings(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.config = config
+
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
@@ -223,20 +226,20 @@ class DisentLMTextEmbeddings(nn.Module):
             config.max_position_embeddings, config.hidden_size, padding_idx=self.padding_idx
         )
 
-        self.x1_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
-        self.y1_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
-        self.x2_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
-        self.y2_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
+        self.x_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
+        self.y_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
+        # self.x2_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
+        # self.y2_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
 
         self.h_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.shape_size)
         self.w_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.shape_size)
 
     def calculate_spatial_position_embeddings(self, bbox):
         try:
-            left_position_embeddings = self.x1_position_embeddings(bbox[:, :, 0])
-            upper_position_embeddings = self.y1_position_embeddings(bbox[:, :, 1])
-            right_position_embeddings = self.x2_position_embeddings(bbox[:, :, 2])
-            lower_position_embeddings = self.y2_position_embeddings(bbox[:, :, 3])
+            left_position_embeddings = self.x_position_embeddings(bbox[:, :, 0])
+            upper_position_embeddings = self.y_position_embeddings(bbox[:, :, 1])
+            right_position_embeddings = self.x_position_embeddings(bbox[:, :, 2])
+            lower_position_embeddings = self.y_position_embeddings(bbox[:, :, 3])
         except IndexError as e:
             raise IndexError("The `bbox` coordinate values should be within 0-1000 range.") from e
 
@@ -302,26 +305,32 @@ class DisentLMTextEmbeddings(nn.Module):
             input_shape = inputs_embeds.size()[:-1]
 
         if token_type_ids is None:
-            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.input_ids.device)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
+        # 1. add type and position embedding, block embeddings
         embeddings = inputs_embeds + token_type_embeddings
         position_embeddings = self.position_embeddings(position_ids)
         embeddings += position_embeddings
 
+        # 2. add 2D spatial embedding
         spatial_position_embeddings = self.calculate_spatial_position_embeddings(bbox)
+        embeddings = embeddings + spatial_position_embeddings
 
-        if self.config.embed_mode=='attention':
-            embeddings = embeddings + spatial_position_embeddings
-            embeddings = self.LayerNorm(embeddings)
-            embeddings = self.dropout(embeddings)
-        elif self.config.embed_mode not in ['embed','both']:
-            print('==wrong mode==')
-            return 
-        return embeddings, spatial_position_embeddings
+        # 3.1. norm input embedding
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+
+        # 3.2. norm spatial input
+        # spatial_embeddings = spatial_position_embeddings + position_embeddings
+        spatial_embeddings = self.LayerNorm(spatial_position_embeddings)
+        spatial_embeddings = self.dropout(spatial_embeddings)
+
+        return embeddings, spatial_embeddings
+
 
 
 class DisentLMPreTrainedModel(PreTrainedModel):
@@ -394,7 +403,7 @@ class DisentLMSelfAttention(nn.Module):
         head_mask=None,
         output_attentions=True,
         rel_pos=None,
-        spatial_attention = None
+        spatial_QKd = None
     ):
         mixed_query_layer = self.query(hidden_states)
 
@@ -405,22 +414,21 @@ class DisentLMSelfAttention(nn.Module):
         # Take the dot product between "query" and "key" to get the raw attention scores.
         # The attention scores QT K/√d could be significantly larger than input elements, and result in overflow.
         # Changing the computational order into QT(K/√d) alleviates the problem. (https://arxiv.org/pdf/2105.13290.pdf)
-        attention_scores = torch.matmul(query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
+        attention_QKd = torch.matmul(query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
 
-        if self.has_relative_attention_bias and rel_pos is not None and spatial_attention is not None:
-            attention_scores += (rel_pos + spatial_attention) / math.sqrt(self.attention_head_size)
-        elif self.has_relative_attention_bias and rel_pos is not None:
-            attention_scores += rel_pos / math.sqrt(self.attention_head_size)
-        elif spatial_attention is not None:
-            attention_scores += spatial_attention / math.sqrt(self.attention_head_size)
-
+        if self.has_relative_attention_bias and rel_pos is not None:
+            attention_QKd += rel_pos / math.sqrt(self.attention_head_size)
+        # incorporate spatial attention
+        if spatial_QKd is not None:   # main text attention
+            attention_QKd += spatial_QKd
+        
         if attention_mask is not None:
-            # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
-            attention_scores = attention_scores + attention_mask
+        # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
+            attention_QKd = attention_QKd + attention_mask
 
-        # Normalize the attention scores to probabilities.
+        # SoftMax operation: Normalize the attention scores to probabilities.
         # Use the trick of the CogView paper to stablize training
-        attention_probs = self.cogview_attention(attention_scores)
+        attention_probs = self.cogview_attention(attention_QKd)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -436,7 +444,7 @@ class DisentLMSelfAttention(nn.Module):
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
 
-        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
+        outputs = (context_layer, attention_probs,attention_QKd) if output_attentions else (context_layer,)
 
         return outputs
 
@@ -460,8 +468,12 @@ class DisentLMSelfOutput(nn.Module):
 class DisentLMAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.self = DisentLMSelfAttention(config)
-        self.output = DisentLMSelfOutput(config)
+        self.config = config
+        # must define two self-attention, the are not shared!
+        self.self_text = DisentLMSelfAttention(config)
+        self.self_spatial = DisentLMSelfAttention(config)
+        self.output_text = DisentLMSelfOutput(config)
+        self.output_spatial = DisentLMSelfOutput(config)
 
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -475,44 +487,45 @@ class DisentLMAttention(nn.Module):
         head_mask=None,
         output_attentions=False,
         rel_pos=None,
+        the_first_layer = False
     ):         
-        # add spatial attention result here
-        spatial_outputs = self.self(
-            hidden_states_spatial,
-            attention_mask,
-            head_mask,
-            output_attentions=True,    # return attentions
-        )
 
-        # 1 attention_mode
-        if config.entangle_mode in ['att','both']:
-            spatial_attention = spatial_outputs[1:]
-        else:
-            spatial_attention = None
-
-        # 2 embed_mode, add before next layer
-        if self.config.entangle_mode in ['both','embed']:
-            # embeddings = embeddings + spatial_position_embeddings
-            # embeddings = self.LayerNorm(embeddings)
-            # embeddings = self.dropout(embeddings)
+        # 1 embed_mode, add before next layer
+        if self.config.entangle_mode in ['both','embed'] and not the_first_layer:   # from 2nd layer to norm
             hidden_states += hidden_states_spatial
             hidden_states = self.LayerNorm(hidden_states)
             hidden_states = self.dropout(hidden_states)
+        
+        # 2 spatial self-attention
+        spatial_outputs = self.self_spatial(
+            hidden_states_spatial,
+            attention_mask,
+            head_mask,
+            rel_pos = None, # do not add relative bias here
+            output_attentions=True,    # fix to True, to return attentions
+            spatial_QKd = None,     # do not add itself
+        )
 
-        # incorporate the attention 
-        self_outputs = self.self(
+        # 3 attention_mode, turn on QKd
+        if self.config.entangle_mode in ['attention','both']:
+            spatial_QKd = spatial_outputs[2]  # the third is the attention QKd
+        else:
+            spatial_QKd = None
+
+        # 3. text self-attention, incorporate the attention or not
+        self_outputs = self.self_text(
             hidden_states,
             attention_mask,
             head_mask,
             output_attentions=output_attentions,    # not necessary
             rel_pos=rel_pos,
-            spatial_attention=spatial_attention, # here it is the important change, for assisted attention!
+            spatial_QKd=spatial_QKd, # here it is the important change, for assisted attention!
         )
 
-        attention_output_spatial = self.output(spatial_outputs[0], hidden_states_spatial)  # add & norm1;  
-        attention_output = self.output(self_outputs[0], hidden_states)  # add & norm1;  
+        attention_output_spatial = self.output_spatial(spatial_outputs[0], hidden_states_spatial)  # add & norm1;  
+        attention_output = self.output_text(self_outputs[0], hidden_states)  # add & norm1;  
         
-        outputs = (attention_output,attention_output_spatial) + self_outputs[1:] + spatial_outputs[1:]  # add attentions if we output them
+        outputs = (attention_output,attention_output_spatial)  # add output only without attention
         return outputs
 
 
@@ -529,11 +542,12 @@ class DisentLMLayer(nn.Module):
     def forward(
         self,
         hidden_states,
-        hidden_states_spatial
+        hidden_states_spatial,
         attention_mask=None,
         head_mask=None,
         output_attentions=False,
         rel_pos=None,
+        the_first_layer = False
     ):
 
         self_attention_outputs = self.attention(
@@ -544,10 +558,9 @@ class DisentLMLayer(nn.Module):
             output_attentions=output_attentions,
             rel_pos=rel_pos,
         )
-        attention_output = self_attention_outputs[0]
-        attention_output_spatial = self_attention_outputs[1]    # spatial one
+        attention_output, attention_output_spatial = self_attention_outputs[0], self_attention_outputs[1]    # spatial one
 
-        attention_scores = self_attention_outputs[2:]  # add self attentions if we output attention weights
+        # attention_scores = self_attention_outputs[2:]  # add self attentions if we output attention weights
 
         layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
@@ -556,7 +569,7 @@ class DisentLMLayer(nn.Module):
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output_spatial
         )
 
-        outputs = (layer_output,layer_output_spatial) + attention_scores
+        outputs = (layer_output,layer_output_spatial)
 
         return outputs
 
@@ -572,13 +585,10 @@ class DisentLMEncoder(nn.Module):
         self.config = config
         self.layer = nn.ModuleList([DisentLMLayer(config) for _ in range(config.num_hidden_layers)])
 
-        self.spatiao_layer = nn.ModuleList([DisentLMLayer(config) for _ in range(config.num_hidden_layers)])
-
         self.gradient_checkpointing = False
 
         self.has_relative_attention_bias = config.has_relative_attention_bias
         self.has_spatial_attention_bias = config.has_spatial_attention_bias
-
 
         # self.spatial_weight = nn.Parameter(torch.FloatTensor(torch.zeros(size=(9,1))))
         # self.spatial_bias = nn.Parameter(torch.FloatTensor(torch.zeros(size=(1,))))
@@ -589,7 +599,7 @@ class DisentLMEncoder(nn.Module):
             self.rel_pos_onehot_size = config.rel_pos_bins
             self.rel_pos_bias = nn.Linear(self.rel_pos_onehot_size, config.num_attention_heads, bias=False)
 
-        if self.has_spatial_attention_bias:
+        # if self.has_spatial_attention_bias:
             self.max_rel_2d_pos = config.max_rel_2d_pos
             self.rel_2d_pos_bins = config.rel_2d_pos_bins
             self.rel_2d_pos_onehot_size = config.rel_2d_pos_bins
@@ -631,7 +641,33 @@ class DisentLMEncoder(nn.Module):
         rel_pos = self.rel_pos_bias(rel_pos).permute(0, 3, 1, 2)
         rel_pos = rel_pos.contiguous()
         return rel_pos
+    
+    def _cal_2d_pos_emb(self, hidden_states, bbox):
 
+        position_coord_x = bbox[:, :, 0]
+        position_coord_y = bbox[:, :, 3]
+
+        rel_pos_x_2d_mat = position_coord_x.unsqueeze(-2) - position_coord_x.unsqueeze(-1)
+        rel_pos_y_2d_mat = position_coord_y.unsqueeze(-2) - position_coord_y.unsqueeze(-1)
+        rel_pos_x = self.relative_position_bucket(
+            rel_pos_x_2d_mat,
+            num_buckets=self.rel_2d_pos_bins,
+            max_distance=self.max_rel_2d_pos,
+        )
+        rel_pos_y = self.relative_position_bucket(
+            rel_pos_y_2d_mat,
+            num_buckets=self.rel_2d_pos_bins,
+            max_distance=self.max_rel_2d_pos,
+        )
+        rel_pos_x = F.one_hot(rel_pos_x, num_classes=self.rel_2d_pos_onehot_size).type_as(hidden_states)
+        rel_pos_y = F.one_hot(rel_pos_y, num_classes=self.rel_2d_pos_onehot_size).type_as(hidden_states)
+        rel_pos_x = self.rel_pos_x_bias(rel_pos_x).permute(0, 3, 1, 2)
+        rel_pos_y = self.rel_pos_y_bias(rel_pos_y).permute(0, 3, 1, 2)
+        rel_pos_x = rel_pos_x.contiguous()
+        rel_pos_y = rel_pos_y.contiguous()
+        rel_2d_pos = rel_pos_x + rel_pos_y
+
+        return rel_2d_pos
 
     def forward(
         self,
@@ -646,7 +682,6 @@ class DisentLMEncoder(nn.Module):
         position_ids=None,
         patch_height=None,
         patch_width=None,
-        spatial_matrix = None,
         device = None,
     ):
         all_hidden_states = () if output_hidden_states else None
@@ -655,9 +690,13 @@ class DisentLMEncoder(nn.Module):
         rel_pos = self._cal_1d_pos_emb(hidden_states, position_ids) if self.has_relative_attention_bias else None
         
         # 1. this is the 2D vector route 
-        # rel_2d_pos = self._cal_2d_pos_emb(hidden_states, bbox) if self.has_spatial_attention_bias else None
-        
+        # rel_pos = self._cal_2d_pos_emb(hidden_states, bbox) if self.has_relative_attention_bias else None
+
+
         for i, layer_module in enumerate(self.layer):
+            # set bool the first layer
+            the_first_layer = (i==0)    
+
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
@@ -683,6 +722,7 @@ class DisentLMEncoder(nn.Module):
                     layer_head_mask,
                     output_attentions,
                     rel_pos,
+                    the_first_layer,
                 )
             else:
                 layer_outputs = layer_module(
@@ -692,6 +732,7 @@ class DisentLMEncoder(nn.Module):
                     layer_head_mask,
                     output_attentions,
                     rel_pos=rel_pos,
+                    the_first_layer = the_first_layer,
                 )
             hidden_states = layer_outputs[0]
             hidden_states_spatial = layer_outputs[1]    # 
@@ -1439,7 +1480,6 @@ class DisentLMForMaskedLM(DisentLMPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = True,
         pixel_values: Optional[torch.LongTensor] = None,
-        spatial_matrix: Optional[torch.LongTensor] = None,
     ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
 
         outputs = self.DisentLM(
@@ -1454,7 +1494,6 @@ class DisentLMForMaskedLM(DisentLMPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             pixel_values=pixel_values,
-            spatial_matrix = spatial_matrix, 
         )
 
         # get [B, S, D] (not pooled), and predict complete sequence
