@@ -75,8 +75,12 @@ class RVLCDIP:
                 })
         def _preprocess(batch):
             # 1) encode words and imgs
-            encodings = self.processor(images=batch['images'],text=batch['tokens'], boxes=batch['bboxes'],
-                truncation=True, padding='max_length', max_length=self.opt.max_seq_len)
+            if bool(self.opt.visual_embed):
+                encodings = self.processor(images=batch['images'],text=batch['tokens'], boxes=batch['bboxes'],
+                    truncation=True, padding='max_length', max_length=self.opt.max_seq_len)
+            else:
+                encodings = self.tokenizer(text=batch['tokens'], boxes=batch['bboxes'], 
+                max_length=self.opt.max_seq_len, padding="max_length", truncation=True)
             # 2) add position_ids
             position_ids = []
             for i, block_ids in enumerate(batch['block_ids']):
