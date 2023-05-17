@@ -52,12 +52,16 @@ class CDIP:
                 'attention_mask': Sequence(Value(dtype='int64')),
                 'bbox': Array2D(dtype="int64", shape=(512, 4)),
                 # 'spatial_matrix': Array3D(dtype='float32', shape=(512, 512, 11)),     # 
-                # 'labels': Sequence(feature=Value(dtype='int64')),
+                'labels': Sequence(feature=Value(dtype='int64')),
                 })
         def _preprocess(batch):
             # 1) encode words and imgs
-            encodings = self.processor(text=batch['tokens'], boxes=batch['bboxes'],
-                truncation=True, padding='max_length', max_length=self.opt.max_seq_len)
+            # encodings = self.processor(images=None, text=batch['tokens'], boxes=batch['bboxes'],
+            #     truncation=True, padding='max_length', max_length=self.opt.max_seq_len)
+            # if there are no images
+            encodings = self.tokenizer(text=batch['tokens'], boxes=batch['bboxes'], 
+                max_length=self.opt.max_seq_len, padding="max_length", truncation=True)
+
             # 2) add position_ids
             position_ids = []
             for i, block_ids in enumerate(batch['block_ids']):
@@ -73,7 +77,7 @@ class CDIP:
             #     spatial_matrix.append(sm)
             # encodings['spatial_matrix'] = spatial_matrix
             # 4) copy labels
-            # encodings['labels'] = encodings['input_ids'].copy()
+            encodings['labels'] = encodings['input_ids'].copy()
 
             return encodings
 
