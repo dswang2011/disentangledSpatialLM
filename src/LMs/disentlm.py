@@ -575,14 +575,8 @@ class DisentLMAttention(nn.Module):
         rel_pos=None,
         the_first_layer = False
     ):         
-
-        # 1 embed_mode, add before next layer
-        if self.config.entangle_mode in ['both','embed'] and not the_first_layer:   # from 2nd layer to norm
-            hidden_states += hidden_states_spatial
-            hidden_states = self.LayerNorm(hidden_states)
-            hidden_states = self.dropout(hidden_states)
         
-        # 2 spatial self-attention
+        # 1 spatial self-attention
         spatial_outputs = self.self_spatial(
             hidden_states_spatial,
             attention_mask,
@@ -592,8 +586,8 @@ class DisentLMAttention(nn.Module):
             spatial_QKd = None,     # do not add itself
         )
 
-        # 3 attention_mode, turn on QKd
-        if self.config.entangle_mode in ['attention','both']:
+        # 2 attention_mode, turn on QKd
+        if self.config.entangle_mode == 'attention':
             spatial_QKd = spatial_outputs[2]  # the third is the attention QKd
         else:
             spatial_QKd = None
@@ -881,6 +875,12 @@ class DisentLMEncoder(nn.Module):
             if output_attentions:
                 all_self_attentions = all_self_attentions + (layer_outputs[2],) # change to the third one
 
+        # replicate cross attention 
+        if self.config.entangle_mode in ['cross','embed']:
+            hidden_states += hidden_states_spatial
+            hidden_states = self.LayerNorm(hidden_states)
+            hidden_states = self.dropout(hidden_states)
+            
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
