@@ -16,9 +16,9 @@ class Params(object):
         is_numberic = re.compile(r'^[-+]?[0-9.]+$')
         for key,value in config_common.items():
             if type(value) == str:
-                if value.lower() == 'true':
+                if value.lower().strip() == 'true':
                     value = True
-                elif value.lower() == 'false':
+                elif value.lower().strip() == 'false':
                     value = False
                 else:
                     result = is_numberic.match(value)
