@@ -17,10 +17,14 @@ class CDIP:
 
         self.cpu_num = os.cpu_count()
         # four maps
-        ds_path = opt.cdip_path
-        self.raw_ds = self.get_raw_ds(ds_path)   # 1) load raw_ds; 2) load imgs; 3) norm bbox
-        self.trainable_ds = self.get_preprocessed_ds(self.raw_ds) # get trainable ds
-
+        folder = '/home/ubuntu/air/vrdu/datasets/rvl_HF_datasets/'
+        ds_list = []
+        for ds_name in ['full_cdip_comb_a_7w.hf','full_cdip_comb_b_5.6w.hf','full_cdip_comb_c_5w.hf','full_cdip_comb_d_6.6w.hf']:
+            ds_path = os.path.join(folder,ds_name)
+            raw_ds = self.get_raw_ds(ds_path)   # 1) load raw_ds; 2) load imgs; 3) norm bbox
+            processed_ds = self.get_preprocessed_ds(raw_ds) # get trainable ds
+            ds_list.append(processed_ds)
+        self.trainable_ds = concatenate_datasets(ds_list)
 
     # load raw dataset (including image object)
     def get_raw_ds(self, ds_path):
