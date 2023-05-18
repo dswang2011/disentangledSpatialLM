@@ -449,6 +449,92 @@ class DisentLMSelfAttention(nn.Module):
         return outputs
 
 
+class DisentLMCrossAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
+            raise ValueError(
+                f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
+                f"heads ({config.num_attention_heads})"
+            )
+
+        self.num_attention_heads = config.num_attention_heads
+        self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        self.query = nn.Linear(config.hidden_size, self.all_head_size)
+        self.key = nn.Linear(config.hidden_size, self.all_head_size)
+        self.value = nn.Linear(config.hidden_size, self.all_head_size)
+
+        self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
+        self.has_relative_attention_bias = config.has_relative_attention_bias
+
+    def transpose_for_scores(self, x):
+        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        x = x.view(*new_x_shape)
+        return x.permute(0, 2, 1, 3)
+
+    def cogview_attention(self, attention_scores, alpha=32):
+        """
+        https://arxiv.org/abs/2105.13290 Section 2.4 Stabilization of training: Precision Bottleneck Relaxation
+        (PB-Relax). A replacement of the original nn.Softmax(dim=-1)(attention_scores). Seems the new attention_probs
+        will result in a slower speed and a little bias. Can use torch.allclose(standard_attention_probs,
+        cogview_attention_probs, atol=1e-08) for comparison. The smaller atol (e.g., 1e-08), the better.
+        """
+        scaled_attention_scores = attention_scores / alpha
+        max_value = scaled_attention_scores.amax(dim=(-1)).unsqueeze(-1)
+        new_attention_scores = (scaled_attention_scores - max_value) * alpha
+        return nn.Softmax(dim=-1)(new_attention_scores)
+
+    def forward(
+        self,
+        hidden_states,
+        hidden_states_k,
+        attention_mask=None,
+        head_mask=None,
+        output_attentions=True,
+        rel_pos=None,
+    ):
+        mixed_query_layer = self.query(hidden_states)
+
+        key_layer = self.transpose_for_scores(self.key(hidden_states_k))
+        value_layer = self.transpose_for_scores(self.value(hidden_states))
+        query_layer = self.transpose_for_scores(mixed_query_layer)
+
+        # Take the dot product between "query" and "key" to get the raw attention scores.
+        # The attention scores QT K/√d could be significantly larger than input elements, and result in overflow.
+        # Changing the computational order into QT(K/√d) alleviates the problem. (https://arxiv.org/pdf/2105.13290.pdf)
+        attention_QKd = torch.matmul(query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
+
+        if self.has_relative_attention_bias and rel_pos is not None:
+            attention_QKd += rel_pos / math.sqrt(self.attention_head_size)
+
+        if attention_mask is not None:
+        # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
+            attention_QKd = attention_QKd + attention_mask
+
+        # SoftMax operation: Normalize the attention scores to probabilities.
+        # Use the trick of the CogView paper to stablize training
+        attention_probs = self.cogview_attention(attention_QKd)
+
+        # This is actually dropping out entire tokens to attend to, which might
+        # seem a bit unusual, but is taken from the original Transformer paper.
+        attention_probs = self.dropout(attention_probs)
+
+        # Mask heads if we want to
+        if head_mask is not None:
+            attention_probs = attention_probs * head_mask
+
+        context_layer = torch.matmul(attention_probs, value_layer)
+
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+        context_layer = context_layer.view(*new_context_layer_shape)
+
+        outputs = (context_layer, attention_probs,attention_QKd) if output_attentions else (context_layer,)
+
+        return outputs
+
 # Copied from transformers.models.roberta.modeling_roberta.RobertaSelfOutput
 class DisentLMSelfOutput(nn.Module):
     def __init__(self, config):
@@ -528,6 +614,59 @@ class DisentLMAttention(nn.Module):
         outputs = (attention_output,attention_output_spatial)  # add output only without attention
         return outputs
 
+# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Attention with LayoutLMv2->DisentLM
+class DisentLMAttentionAcross(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        # must define two self-attention, the are not shared!
+        self.cross_text = DisentLMCrossAttention(config)
+        self.cross_spatial = DisentLMCrossAttention(config)
+        self.output_text = DisentLMSelfOutput(config)
+        self.output_spatial = DisentLMSelfOutput(config)
+
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+
+    def forward(
+        self,
+        hidden_states,
+        hidden_states_spatial,
+        attention_mask=None,
+        head_mask=None,
+        output_attentions=False,
+        rel_pos=None,
+        the_first_layer = False
+    ):         
+        
+        # 1 spatial self-attention
+        spatial_outputs = self.cross_spatial(
+            hidden_states_spatial,
+            hidden_states
+            attention_mask,
+            head_mask,
+            rel_pos = None, # do not add relative bias here
+            output_attentions=False,    # fix to True, to return attentions
+        )
+
+        # 3. text self-attention, incorporate the attention or not
+        self_outputs = self.cross_text(
+            hidden_states,
+            hidden_states_spatial,
+            attention_mask,
+            head_mask,
+            output_attentions=False,    # not necessary
+            rel_pos=rel_pos,
+        )
+
+        attention_output_spatial = self.output_spatial(spatial_outputs[0], hidden_states_spatial)  # add & norm1;  
+        attention_output = self.output_text(self_outputs[0], hidden_states)  # add & norm1;  
+        
+        outputs = (attention_output,attention_output_spatial)  # add output only without attention
+        return outputs
+
+
 
 # Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->DisentLM
 class DisentLMLayer(nn.Module):
@@ -535,7 +674,10 @@ class DisentLMLayer(nn.Module):
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        self.attention = DisentLMAttention(config)
+        if config.entangle_mode == 'cross':
+            self.attention = DisentLMAttentionAcross(config)
+        else:
+           self.attention = DisentLMAttention(config)
         self.intermediate = DisentLMIntermediate(config)
         self.output = DisentLMOutput(config)
 
