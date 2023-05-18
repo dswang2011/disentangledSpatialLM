@@ -643,7 +643,7 @@ class DisentLMAttentionAcross(nn.Module):
         # 1 spatial self-attention
         spatial_outputs = self.cross_spatial(
             hidden_states_spatial,
-            hidden_states
+            hidden_states,
             attention_mask,
             head_mask,
             rel_pos = None, # do not add relative bias here
@@ -667,7 +667,6 @@ class DisentLMAttentionAcross(nn.Module):
         return outputs
 
 
-
 # Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->DisentLM
 class DisentLMLayer(nn.Module):
     def __init__(self, config):
@@ -676,7 +675,7 @@ class DisentLMLayer(nn.Module):
         self.seq_len_dim = 1
         if config.entangle_mode == 'cross':
             self.attention = DisentLMAttentionAcross(config)
-        else:
+        elif config.entangle_mode in ['embed','attention','both']:
            self.attention = DisentLMAttention(config)
         self.intermediate = DisentLMIntermediate(config)
         self.output = DisentLMOutput(config)
