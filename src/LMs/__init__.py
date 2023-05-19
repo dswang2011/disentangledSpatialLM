@@ -35,14 +35,14 @@ def setup(opt):
                 # the first time, we first start from layoutlm; put layoutlm_dir
                 print('=== load the first time from layoutlmv3 ===')
                 config = AutoConfig.from_pretrained(opt.layoutlm_dir)   # borrow config
-                model = SpatialLMForMaskedLM(config=config, start_dir_path=opt.layoutlm_dir)
+                model = DisentLMForMaskedLM(config=config, start_dir_path=opt.layoutlm_dir)
         elif opt.task_type == 'token-classifier':
             config = DisentLMConfig.from_pretrained(opt.checkpoint_path)
             config.num_labels=opt.num_labels    # set label num
             # config.id2label, config.label2id = opt.id2label, opt.label2id
             config.entangle_mode = opt.entangle_mode
             config.visual_embed = False
-            model = DisentLMForTokenClassification(config = config)
+            model = DisentLMForTokenClassification.from_pretrained(opt.checkpoint_path, config = config)
         print('entangle mode:', config.entangle_mode)
 
     else:
