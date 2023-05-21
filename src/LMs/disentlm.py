@@ -1138,6 +1138,11 @@ class DisentLMModel(DisentLMPreTrainedModel):
 
             embedding_output = self.LayerNorm(embedding_output)
             embedding_output = self.dropout(embedding_output)
+
+            # extend spatial embeding
+            # batch_size = embed_output_spatial.size()[0]
+            embed_output_spatial = torch.cat([embed_output_spatial,visual_embeddings],dim=-2)
+
         elif self.config.has_relative_attention_bias or self.config.has_spatial_attention_bias:
             if self.config.has_spatial_attention_bias:
                 final_bbox = bbox
