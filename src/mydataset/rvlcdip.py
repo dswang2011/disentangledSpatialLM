@@ -65,7 +65,7 @@ class RVLCDIP:
     # overall preprocessing
     def get_preprocessed_ds(self,ds):
         features = Features({
-                # 'pixel_values': Array3D(dtype="float32", shape=(3, 224, 224)),
+                'pixel_values': Array3D(dtype="float32", shape=(3, 224, 224)),
                 'input_ids': Sequence(feature=Value(dtype='int64')),
                 'position_ids': Sequence(feature=Value(dtype='int64')),
                 'attention_mask': Sequence(Value(dtype='int64')),
