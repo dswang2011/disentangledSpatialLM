@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from transformers.activations import gelu  # ACT2FN
+
 
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
@@ -31,7 +31,6 @@ from transformers.modeling_outputs import (
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
-    MaskedLMOutput
 )
 from transformers.modeling_utils import PreTrainedModel
 from transformers.pytorch_utils import apply_chunking_to_forward
@@ -44,8 +43,8 @@ logger = logging.get_logger(__name__)
 _CONFIG_FOR_DOC = "DisentLMConfig"
 
 DisentLM_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "jpmchase/DisentLM-base",
-    "jpmchase/DisentLM-large",
+    "microsoft/DisentLM-base",
+    "microsoft/DisentLM-large",
     # See all DisentLM models at https://huggingface.co/models?filter=DisentLM
 ]
 
@@ -210,8 +209,6 @@ class DisentLMTextEmbeddings(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.config = config
-
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
@@ -228,9 +225,6 @@ class DisentLMTextEmbeddings(nn.Module):
 
         self.x_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
         self.y_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
-        # self.x2_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
-        # self.y2_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.coordinate_size)
-
         self.h_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.shape_size)
         self.w_position_embeddings = nn.Embedding(config.max_2d_position_embeddings, config.shape_size)
 
@@ -305,32 +299,23 @@ class DisentLMTextEmbeddings(nn.Module):
             input_shape = inputs_embeds.size()[:-1]
 
         if token_type_ids is None:
-            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.input_ids.device)
+            token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.position_ids.device)
 
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
-        # 1. add type and position embedding, block embeddings
         embeddings = inputs_embeds + token_type_embeddings
         position_embeddings = self.position_embeddings(position_ids)
         embeddings += position_embeddings
 
-        # 2. add 2D spatial embedding
         spatial_position_embeddings = self.calculate_spatial_position_embeddings(bbox)
+
         embeddings = embeddings + spatial_position_embeddings
 
-        # 3.1. norm input embedding
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
-
-        # 3.2. norm spatial input
-        # spatial_embeddings = spatial_position_embeddings + position_embeddings
-        spatial_embeddings = self.LayerNorm(spatial_position_embeddings)
-        spatial_embeddings = self.dropout(spatial_embeddings)
-
-        return embeddings, spatial_embeddings
-
+        return embeddings
 
 
 class DisentLMPreTrainedModel(PreTrainedModel):
@@ -378,6 +363,7 @@ class DisentLMSelfAttention(nn.Module):
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.has_relative_attention_bias = config.has_relative_attention_bias
+        self.has_spatial_attention_bias = config.has_spatial_attention_bias
 
     def transpose_for_scores(self, x):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -401,9 +387,9 @@ class DisentLMSelfAttention(nn.Module):
         hidden_states,
         attention_mask=None,
         head_mask=None,
-        output_attentions=True,
+        output_attentions=False,
         rel_pos=None,
-        spatial_QKd = None
+        rel_2d_pos=None,
     ):
         mixed_query_layer = self.query(hidden_states)
 
@@ -414,21 +400,23 @@ class DisentLMSelfAttention(nn.Module):
         # Take the dot product between "query" and "key" to get the raw attention scores.
         # The attention scores QT K/√d could be significantly larger than input elements, and result in overflow.
         # Changing the computational order into QT(K/√d) alleviates the problem. (https://arxiv.org/pdf/2105.13290.pdf)
-        attention_QKd = torch.matmul(query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
+        attention_scores = torch.matmul(query_layer / math.sqrt(self.attention_head_size), key_layer.transpose(-1, -2))
 
-        if self.has_relative_attention_bias and rel_pos is not None:
-            attention_QKd += rel_pos / math.sqrt(self.attention_head_size)
-        # incorporate spatial attention
-        if spatial_QKd is not None:   # main text attention
-            attention_QKd += spatial_QKd
-        
+        if self.has_relative_attention_bias and self.has_spatial_attention_bias:
+            attention_scores += (rel_pos + rel_2d_pos) / math.sqrt(self.attention_head_size)
+        elif self.has_relative_attention_bias:
+            attention_scores += rel_pos / math.sqrt(self.attention_head_size)
+        elif self.has_spatial_attention_bias and rel_2d_pos is not None:
+            attention_scores += rel_2d_pos / math.sqrt(self.attention_head_size)
+            # attention_scores += rel_2d_pos
+
         if attention_mask is not None:
-        # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
-            attention_QKd = attention_QKd + attention_mask
+            # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
+            attention_scores = attention_scores + attention_mask
 
-        # SoftMax operation: Normalize the attention scores to probabilities.
+        # Normalize the attention scores to probabilities.
         # Use the trick of the CogView paper to stablize training
-        attention_probs = self.cogview_attention(attention_QKd)
+        attention_probs = self.cogview_attention(attention_scores)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -444,11 +432,100 @@ class DisentLMSelfAttention(nn.Module):
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
 
-        outputs = (context_layer, attention_probs,attention_QKd) if output_attentions else (context_layer,)
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs
 
 
+# Copied from transformers.models.roberta.modeling_roberta.RobertaSelfOutput
+class DisentLMSelfOutput(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+
+    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        return hidden_states
+
+
+# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Attention with LayoutLMv2->DisentLM
+class DisentLMAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.self = DisentLMSelfAttention(config)
+        self.output = DisentLMSelfOutput(config)
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        head_mask=None,
+        output_attentions=False,
+        rel_pos=None,
+        rel_2d_pos=None,
+    ):
+        self_outputs = self.self(
+            hidden_states,
+            attention_mask,
+            head_mask,
+            output_attentions,
+            rel_pos=rel_pos,
+            rel_2d_pos=rel_2d_pos,
+        )
+        attention_output = self.output(self_outputs[0], hidden_states)
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        return outputs
+
+
+# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->DisentLM
+class DisentLMLayer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.chunk_size_feed_forward = config.chunk_size_feed_forward
+        self.seq_len_dim = 1
+        self.attention = DisentLMAttention(config)
+        self.intermediate = DisentLMIntermediate(config)
+        self.output = DisentLMOutput(config)
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        head_mask=None,
+        output_attentions=False,
+        rel_pos=None,
+        rel_2d_pos=None,
+    ):
+        self_attention_outputs = self.attention(
+            hidden_states,
+            attention_mask,
+            head_mask,
+            output_attentions=output_attentions,
+            rel_pos=rel_pos,
+            rel_2d_pos=rel_2d_pos,
+        )
+        attention_output = self_attention_outputs[0]
+
+        outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
+
+        layer_output = apply_chunking_to_forward(
+            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
+        )
+        outputs = (layer_output,) + outputs
+
+        return outputs
+
+    def feed_forward_chunk(self, attention_output):
+        intermediate_output = self.intermediate(attention_output)
+        layer_output = self.output(intermediate_output, attention_output)
+        return layer_output
+
+
+# spatial attention only on top of text value 
 class DisentLMCrossAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -495,7 +572,7 @@ class DisentLMCrossAttention(nn.Module):
         output_attentions=True,
         rel_pos=None,
     ):
-        mixed_query_layer = self.query(hidden_states)
+        mixed_query_layer = self.query(hidden_states_k)
 
         key_layer = self.transpose_for_scores(self.key(hidden_states_k))
         value_layer = self.transpose_for_scores(self.value(hidden_states))
@@ -535,81 +612,6 @@ class DisentLMCrossAttention(nn.Module):
 
         return outputs
 
-# Copied from transformers.models.roberta.modeling_roberta.RobertaSelfOutput
-class DisentLMSelfOutput(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
-        return hidden_states
-
-
-# Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Attention with LayoutLMv2->DisentLM
-class DisentLMAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        # must define two self-attention, the are not shared!
-        self.self_text = DisentLMSelfAttention(config)
-        self.self_spatial = DisentLMSelfAttention(config)
-        self.output_text = DisentLMSelfOutput(config)
-        self.output_spatial = DisentLMSelfOutput(config)
-
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-
-
-    def forward(
-        self,
-        hidden_states,
-        hidden_states_spatial,
-        attention_mask=None,
-        head_mask=None,
-        output_attentions=False,
-        rel_pos=None,
-        the_first_layer = False
-    ):         
-        
-        # 1 spatial self-attention
-        spatial_outputs = self.self_spatial(
-            hidden_states_spatial,
-            attention_mask,
-            head_mask,
-            rel_pos = None, # do not add relative bias here
-            output_attentions=True,    # fix to True, to return attentions
-            spatial_QKd = None,     # do not add itself
-        )
-
-        # 2 attention_mode, turn on QKd
-        if self.config.entangle_mode == 'attention':
-            spatial_QKd = spatial_outputs[2]  # the third is the attention QKd
-        else:
-            spatial_QKd = None
-
-        # 3. text self-attention, incorporate the attention or not
-        self_outputs = self.self_text(
-            hidden_states,
-            attention_mask,
-            head_mask,
-            output_attentions=output_attentions,    # not necessary
-            rel_pos=rel_pos,
-            spatial_QKd=spatial_QKd, # here it is the important change, for assisted attention!
-        )
-
-        if self.config.spatial_attention_update:
-            attention_output_spatial = self.output_spatial(spatial_outputs[0], hidden_states_spatial)  # add & norm1;  
-        else:
-            attention_output_spatial = None
-        attention_output = self.output_text(self_outputs[0], hidden_states)  # add & norm1;  
-        
-        outputs = (attention_output,attention_output_spatial)  # add output only without attention
-        return outputs
 
 # Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Attention with LayoutLMv2->DisentLM
 class DisentLMAttentionAcross(nn.Module):
@@ -618,9 +620,7 @@ class DisentLMAttentionAcross(nn.Module):
         self.config = config
         # must define two self-attention, the are not shared!
         self.cross_text = DisentLMCrossAttention(config)
-        self.cross_spatial = DisentLMCrossAttention(config)
         self.output_text = DisentLMSelfOutput(config)
-        self.output_spatial = DisentLMSelfOutput(config)
 
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -636,18 +636,8 @@ class DisentLMAttentionAcross(nn.Module):
         rel_pos=None,
         the_first_layer = False
     ):         
-        
-        # 1 spatial self-attention
-        spatial_outputs = self.cross_spatial(
-            hidden_states_spatial,
-            hidden_states,
-            attention_mask,
-            head_mask,
-            rel_pos = None, # do not add relative bias here
-            output_attentions=False,    # fix to True, to return attentions
-        )
 
-        # 3. text self-attention, incorporate the attention or not
+        # self-attention, incorporate the attention or not
         self_outputs = self.cross_text(
             hidden_states,
             hidden_states_spatial,
@@ -657,24 +647,18 @@ class DisentLMAttentionAcross(nn.Module):
             rel_pos=rel_pos,
         )
 
-        attention_output_spatial = self.output_spatial(spatial_outputs[0], hidden_states_spatial)  # add & norm1;  
         attention_output = self.output_text(self_outputs[0], hidden_states)  # add & norm1;  
         
-        outputs = (attention_output,attention_output_spatial)  # add output only without attention
+        outputs = (attention_output,attention_output[1])  # add output only without attention
         return outputs
-
-
+    
 # Copied from transformers.models.layoutlmv2.modeling_layoutlmv2.LayoutLMv2Layer with LayoutLMv2->DisentLM
-class DisentLMLayer(nn.Module):
+class DisentLMSpatialLayer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.config = config
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
-        if config.entangle_mode == 'cross':
-            self.attention = DisentLMAttentionAcross(config)
-        elif config.entangle_mode in ['embed','attention','both']:
-           self.attention = DisentLMAttention(config)
+        self.attention_cross = DisentLMAttentionAcross(config)
         self.intermediate = DisentLMIntermediate(config)
         self.output = DisentLMOutput(config)
 
@@ -704,12 +688,9 @@ class DisentLMLayer(nn.Module):
         layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
         )
-        if self.config.spatial_attention_update:
-            layer_output_spatial = apply_chunking_to_forward(
-                self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output_spatial
-            )
-        else:
-            layer_output_spatial = None
+        layer_output_spatial = apply_chunking_to_forward(
+            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output_spatial
+        )
 
         outputs = (layer_output,layer_output_spatial)
 
@@ -719,21 +700,20 @@ class DisentLMLayer(nn.Module):
         intermediate_output = self.intermediate(attention_output)
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
-
+    
 
 class DisentLMEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
         self.layer = nn.ModuleList([DisentLMLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layer_spatial = nn.ModuleList([DisentLMSpatialLayer(config) for _ in range(config.num_hidden_layers//2)])
 
         self.gradient_checkpointing = False
 
         self.has_relative_attention_bias = config.has_relative_attention_bias
         self.has_spatial_attention_bias = config.has_spatial_attention_bias
 
-        # self.spatial_weight = nn.Parameter(torch.FloatTensor(torch.zeros(size=(9,1))))
-        # self.spatial_bias = nn.Parameter(torch.FloatTensor(torch.zeros(size=(1,))))
 
         if self.has_relative_attention_bias:
             self.rel_pos_bins = config.rel_pos_bins
@@ -741,7 +721,7 @@ class DisentLMEncoder(nn.Module):
             self.rel_pos_onehot_size = config.rel_pos_bins
             self.rel_pos_bias = nn.Linear(self.rel_pos_onehot_size, config.num_attention_heads, bias=False)
 
-        # if self.has_spatial_attention_bias:
+        if self.has_spatial_attention_bias:
             self.max_rel_2d_pos = config.max_rel_2d_pos
             self.rel_2d_pos_bins = config.rel_2d_pos_bins
             self.rel_2d_pos_onehot_size = config.rel_2d_pos_bins
@@ -783,7 +763,70 @@ class DisentLMEncoder(nn.Module):
         rel_pos = self.rel_pos_bias(rel_pos).permute(0, 3, 1, 2)
         rel_pos = rel_pos.contiguous()
         return rel_pos
-    
+
+    def _rule_polar(self, rect_src : list, rect_dst : list) -> Tuple[int, int]:
+        """Compute distance and direction from src to dst bounding boxes
+        Args:
+            rect_src (list) : source rectangle coordinates
+            rect_dst (list) : destination rectangle coordinates
+        
+        Returns:
+            tuple (ints): distance and direction
+        """
+        # check relative position
+        left = (rect_dst[2] - rect_src[0]) <= 0 # left-top point
+        bottom = (rect_src[3] - rect_dst[1]) <= 0   # 
+        right = (rect_src[2] - rect_dst[0]) <= 0
+        top = (rect_dst[3] - rect_src[1]) <= 0
+        
+        vp_intersect = (rect_src[0] <= rect_dst[2] and rect_dst[0] <= rect_src[2]) # True if two rects "see" each other vertically, above or under
+        hp_intersect = (rect_src[1] <= rect_dst[3] and rect_dst[1] <= rect_src[3]) # True if two rects "see" each other horizontally, right or left
+        rect_intersect = vp_intersect and hp_intersect 
+
+        if rect_intersect:
+            return 0,0, 0
+        elif top and left:
+            a, b = abs(rect_dst[2] - rect_src[0]), abs(rect_dst[3] - rect_src[1])
+            return int(a),int(b), 4
+        elif left and bottom:
+            a, b = abs(rect_dst[2] - rect_src[0]), abs(rect_dst[1] - rect_src[3])
+            return int(a),int(b), 6
+        elif bottom and right:
+            a, b = abs(rect_dst[0] - rect_src[2]), abs(rect_dst[1] - rect_src[3])
+            return int(a),int(b),8
+        elif right and top:
+            a, b = abs(rect_dst[0] - rect_src[2]), abs(rect_dst[3] - rect_src[1])
+            return int(a),int(b), 2
+        elif left:
+            return int(abs(rect_src[0] - rect_dst[2])),0, 5
+        elif right:
+            return int(abs(rect_dst[0] - rect_src[2])),0, 1
+        elif bottom:
+            return 0, int(abs(rect_dst[1] - rect_src[3])), 7
+        elif top:
+            return 0, int(abs(rect_src[1] - rect_dst[3])), 3
+        else:
+            print('why the relative position is no where?')
+
+    # for each bboxs
+    def _fully_connected_matrix(self, bboxs):
+        directs = []
+        d1s,d2s = [],[]
+        for i in range(len(bboxs)):
+            for j in range(len(bboxs)):
+                box1, box2 = bboxs[i],bboxs[j]
+                d1,d2,direct = self._rule_polar(list(box1), list(box2))
+                # direct = angle //45 
+                directs.append(direct)
+                d1s.append(d1)
+                d2s.append(d2)
+        direct_vect = F.one_hot(torch.tensor(directs), num_classes = 9)
+        dist_vect = torch.tensor([[d1, d2] for d1,d2 in zip(d1s,d2s)])
+        nn_vects = torch.cat((direct_vect, dist_vect), -1)
+        return nn_vects
+
+
+
     def _cal_2d_pos_emb(self, hidden_states, bbox):
 
         position_coord_x = bbox[:, :, 0]
@@ -831,14 +874,13 @@ class DisentLMEncoder(nn.Module):
 
         rel_pos = self._cal_1d_pos_emb(hidden_states, position_ids) if self.has_relative_attention_bias else None
         
-        # 1. this is the 2D vector route 
-        # rel_pos = self._cal_2d_pos_emb(hidden_states, bbox) if self.has_relative_attention_bias else None
-
-
+        # if bool(self.config.spatial_attention):
+        #     rel_2d_pos = self._cal_2d_spatial_attention(spatial_matrix, bbox, device)
+        #     # rel_2d_pos = self._cal_2d_spatial_sa(spatial_matrix,bbox, device)
+        # else:
+        rel_2d_pos = self._cal_2d_pos_emb(hidden_states, bbox) if self.has_spatial_attention_bias else None
+        
         for i, layer_module in enumerate(self.layer):
-            # set bool the first layer
-            the_first_layer = (i==0)    
-
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
@@ -859,38 +901,59 @@ class DisentLMEncoder(nn.Module):
                 layer_outputs = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(layer_module),
                     hidden_states,
-                    hidden_states_spatial,
                     attention_mask,
                     layer_head_mask,
                     output_attentions,
                     rel_pos,
-                    the_first_layer,
+                    rel_2d_pos,
                 )
             else:
                 layer_outputs = layer_module(
+                    hidden_states,
+                    attention_mask,
+                    layer_head_mask,
+                    output_attentions,
+                    rel_pos=rel_pos,
+                    rel_2d_pos=rel_2d_pos,
+                )
+            hidden_states = layer_outputs[0]
+            if output_attentions:
+                all_self_attentions = all_self_attentions + (layer_outputs[1],)
+
+        # Add extra spatial attention 
+        for i, layer_module in enumerate(self.layer_spatial):
+            layer_head_mask = head_mask[i] if head_mask is not None else None
+
+            if self.gradient_checkpointing and self.training:
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+                    return custom_forward
+                
+                layer_outputs = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer_module),
                     hidden_states,
                     hidden_states_spatial,
                     attention_mask,
                     layer_head_mask,
                     output_attentions,
-                    rel_pos=rel_pos,
-                    the_first_layer = the_first_layer,
-                )
-            # update main semantics 
+                    rel_pos,
+                    rel_2d_pos,
+                )   
+            else:
+                layer_outputs = layer_module(
+                        hidden_states,
+                        hidden_states_spatial,
+                        attention_mask,
+                        layer_head_mask,
+                        output_attentions,
+                        rel_pos=rel_pos,
+                        rel_2d_pos=rel_2d_pos,
+                    )
             hidden_states = layer_outputs[0]
-            # update spatial semantics?
-            if self.config.spatial_attention_update:
-                hidden_states_spatial = layer_outputs[1]    #
-
             if output_attentions:
-                all_self_attentions = all_self_attentions + (layer_outputs[2],) # change to the third one
+                all_self_attentions = all_self_attentions + (layer_outputs[1],)
 
-        # replicate cross attention 
-        if self.config.entangle_mode in ['cross','embed']:
-            hidden_states += hidden_states_spatial
-            hidden_states = self.LayerNorm(hidden_states)
-            hidden_states = self.dropout(hidden_states)
-            
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
@@ -1054,6 +1117,7 @@ class DisentLMModel(DisentLMPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        spatial_matrix: Optional[torch.LongTensor] = None,
     ) -> Union[Tuple, BaseModelOutput]:
         r"""
         Returns:
@@ -1100,7 +1164,7 @@ class DisentLMModel(DisentLMPreTrainedModel):
             if bbox is None:
                 bbox = torch.zeros(tuple(list(input_shape) + [4]), dtype=torch.long, device=device)
 
-            embedding_output, embed_output_spatial = self.embeddings(
+            embedding_output = self.embeddings(
                 input_ids=input_ids,
                 bbox=bbox,
                 position_ids=position_ids,
@@ -1148,15 +1212,6 @@ class DisentLMModel(DisentLMPreTrainedModel):
 
             embedding_output = self.LayerNorm(embedding_output)
             embedding_output = self.dropout(embedding_output)
-
-            # extend spatial embeding with simple order embed!
-            if self.pos_embed is not None:
-                batch_size = embed_output_spatial.size()[0]
-                visual_pos_embed = self.pos_embed.repeat(batch_size,1,1)
-                embed_output_spatial = torch.cat([embed_output_spatial,visual_pos_embed],dim=-2)
-            else:
-                embed_output_spatial = torch.cat([embed_output_spatial,visual_embeddings],dim=-2)
-
         elif self.config.has_relative_attention_bias or self.config.has_spatial_attention_bias:
             if self.config.has_spatial_attention_bias:
                 final_bbox = bbox
@@ -1178,7 +1233,6 @@ class DisentLMModel(DisentLMPreTrainedModel):
 
         encoder_outputs = self.encoder(
             embedding_output,
-            embed_output_spatial,
             bbox=final_bbox,
             position_ids=final_position_ids,
             attention_mask=extended_attention_mask,
@@ -1188,6 +1242,7 @@ class DisentLMModel(DisentLMPreTrainedModel):
             return_dict=return_dict,
             patch_height=patch_height,
             patch_width=patch_width,
+            # spatial_matrix=spatial_matrix,
             device = device,
         )
 
@@ -1576,115 +1631,3 @@ class DisentLMForSequenceClassification(DisentLMPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
-class DisentLMHead(nn.Module):
-    """copied from Roberta Head for masked language modeling."""
-
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size)
-        self.bias = nn.Parameter(torch.zeros(config.vocab_size))
-        self.decoder.bias = self.bias
-
-    def forward(self, features, **kwargs):
-        x = self.dense(features)
-        x = gelu(x)
-        x = self.layer_norm(x)
-
-        # project back to size of vocabulary with bias
-        x = self.decoder(x)
-
-        return x
-
-    def _tie_weights(self):
-        # To tie those two weights if they get disconnected (on TPU or when the bias is resized)
-        # For accelerate compatibility and to not break backward compatibility
-        if self.decoder.bias.device.type == "meta":
-            self.decoder.bias = self.bias
-        else:
-            self.bias = self.decoder.bias
-
-
-class DisentLMForMaskedLM(DisentLMPreTrainedModel):
-    def __init__(self, config, start_dir_path=None):
-        super(DisentLMForMaskedLM, self).__init__(config)
-        config.has_relative_attention_bias = False
-
-        # if the model is loaded the first time, we take advantage of the layoutlm
-        if start_dir_path:
-            self.DisentLM = DisentLMModel.from_pretrained(start_dir_path, config = config)
-        else:
-            self.DisentLM = DisentLMModel(config)
-
-        self.lm_head = DisentLMHead(config)
-
-        # The LM head weights require special treatment only when they are tied with the word embeddings
-        # self.update_keys_to_ignore(config, ["lm_head.decoder.weight"])
-        # self.post_init()
-
-    def forward(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        bbox: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = True,
-        pixel_values: Optional[torch.LongTensor] = None,
-    ) -> Union[Tuple[torch.Tensor], MaskedLMOutput]:
-
-        outputs = self.DisentLM(
-            input_ids,
-            bbox=bbox,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-            pixel_values=pixel_values,
-        )
-
-        # get [B, S, D] (not pooled), and predict complete sequence
-        # sequence_output = outputs[0]
-        # We need to remove the vision part
-        input_shape = input_ids.size()
-        seq_length = input_shape[1]
-        # only take the text part of the output representations, i.e., [B, S-text, D]
-        sequence_output = outputs[0][:, :seq_length]
-
-        prediction_scores = self.lm_head(sequence_output)
-
-        # calculate the loss btw predicted sequence and true sequence
-        masked_lm_loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(
-                prediction_scores.view(-1, self.config.vocab_size),
-                labels.view(-1),
-            )
-        else:
-            print('==== why there is no sequencial labels?=======')
-
-        if not return_dict:
-            output = (prediction_scores,) + outputs[2:]
-            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
-
-        return MaskedLMOutput(
-            loss=masked_lm_loss,
-            logits=prediction_scores,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-        return outputs

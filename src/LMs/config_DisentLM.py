@@ -142,6 +142,7 @@ class DisentLMConfig(PretrainedConfig):
         max_rel_2d_pos=256,
         text_embed=True,
         visual_embed=True,
+        spatial_attention_update=False, # whether update spatial attention if we select attention
         input_size=224,
         num_channels=3,
         patch_size=16,
@@ -180,6 +181,7 @@ class DisentLMConfig(PretrainedConfig):
         self.num_channels = num_channels
         self.patch_size = patch_size
         self.classifier_dropout = classifier_dropout
+        self.spatial_attention_update = spatial_attention_update
 
 
 class DisentLMOnnxConfig(OnnxConfig):
